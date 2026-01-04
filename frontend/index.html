@@ -17,24 +17,80 @@
         <header class="mb-6 text-center">
             <h1 class="text-3xl font-bold text-gray-800">ShadowPartner 影子跟读</h1>
             <p class="text-gray-600">输入 YouTube 链接，开始你的跟读之旅</p>
+            <!-- System Status -->
+            <div class="mt-2 text-sm flex flex-col items-center gap-1">
+                <div>
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+                          :class="backendStatus.online ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'">
+                        <span class="w-2 h-2 mr-1 rounded-full" :class="backendStatus.online ? 'bg-green-400' : 'bg-red-400'"></span>
+                        后端服务: {{ backendStatus.online ? '在线' : '离线' }}
+                    </span>
+                    <span v-if="!backendStatus.online" class="ml-2 text-red-500 text-xs">
+                        (上次检查: {{ backendStatus.lastCheck?.toLocaleTimeString() }})
+                    </span>
+                </div>
+                <!-- Manual Backend URL Override -->
+                <div class="flex items-center gap-2 mt-1">
+                    <input type="text" v-model="apiBaseUrl" @change="manualUpdateBaseUrl" class="text-xs border border-gray-300 rounded px-2 py-1 w-64 text-center" placeholder="Backend API URL (e.g. http://localhost:8000)">
+                    <button @click="checkBackendHealth" class="text-xs bg-gray-200 hover:bg-gray-300 px-2 py-1 rounded">重试</button>
+                </div>
+            </div>
         </header>
 
         <!-- Input Area -->
         <div class="bg-white p-6 rounded-lg shadow-md mb-6">
-            <div class="flex gap-4">
-                <input 
-                    v-model="videoUrl" 
-                    type="text" 
-                    placeholder="粘贴 YouTube 视频链接..." 
-                    class="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            <div class="flex flex-col gap-4">
+                <!-- YouTube URL Input -->
+                <div class="flex gap-4">
+                    <input 
+                        v-model="videoUrl" 
+                        type="text" 
+                        placeholder="粘贴 YouTube 视频链接..." 
+                        class="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        :disabled="loading || !!selectedFile"
+                    >
+                    <button 
+                        @click="processVideo" 
+                        :disabled="loading || (!videoUrl && !selectedFile)"
+                        class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                    >
+                        {{ loading ? '处理中...' : '开始' }}
+                    </button>
+                </div>
+
+                <!-- Divider -->
+                <div class="relative flex py-2 items-center">
+                    <div class="flex-grow border-t border-gray-300"></div>
+                    <span class="flex-shrink-0 mx-4 text-gray-400">或者</span>
+                    <div class="flex-grow border-t border-gray-300"></div>
+                </div>
+
+                <!-- File Upload -->
+                <div class="flex gap-4 items-center justify-center p-6 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-500 transition-colors"
+                     @dragover.prevent
+                     @drop.prevent="handleFileDrop"
                 >
-                <button 
-                    @click="processVideo" 
-                    :disabled="loading"
-                    class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                    {{ loading ? '处理中...' : '开始' }}
-                </button>
+                    <input 
+                        type="file" 
+                        ref="fileInput" 
+                        class="hidden" 
+                        accept="audio/*,video/*"
+                        @change="handleFileUpload"
+                    >
+                    <div v-if="!selectedFile" class="text-center cursor-pointer" @click="$refs.fileInput.click()">
+                        <p class="text-gray-600 font-medium">点击或拖拽上传视频/音频文件</p>
+                        <p class="text-sm text-gray-400 mt-1">支持 MP3, MP4, WAV 等格式</p>
+                    </div>
+                    <div v-else class="flex items-center gap-4 w-full justify-between bg-blue-50 p-3 rounded">
+                        <div class="flex items-center gap-2">
+                            <svg class="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                            <span class="font-medium text-gray-700 truncate max-w-[200px]">{{ selectedFile.name }}</span>
+                        </div>
+                        <button @click="clearFile" class="text-red-500 hover:text-red-700 p-1">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
 

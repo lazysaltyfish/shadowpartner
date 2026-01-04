@@ -10,12 +10,102 @@ createApp({
         const currentSegmentIndex = ref(-1);
         const segmentRefs = ref({});
         const subtitleContainer = ref(null);
+        const selectedFile = ref(null);
+        const fileInput = ref(null);
+        const isFileMode = ref(false); // New state to track if we're using file or URL
+        const backendStatus = ref({
+            online: false,
+            lastCheck: null
+        });
+        const apiBaseUrl = ref('http://localhost:8000');
+
+        const manualUpdateBaseUrl = () => {
+             console.log('Manually updating API Base URL to:', apiBaseUrl.value);
+             // Remove trailing slash if present
+             if (apiBaseUrl.value.endsWith('/')) {
+                 apiBaseUrl.value = apiBaseUrl.value.slice(0, -1);
+             }
+             localStorage.setItem('shadowpartner_api_url', apiBaseUrl.value);
+             checkBackendHealth();
+        };
+
+        // Backend Health Check
+        const checkBackendHealth = async () => {
+            try {
+                // If user has manually set a URL, prioritize it
+                const storedUrl = localStorage.getItem('shadowpartner_api_url');
+                if (storedUrl) {
+                     apiBaseUrl.value = storedUrl;
+                } else {
+                    let baseUrl = 'http://localhost:8000';
+                    
+                    // Codespaces & Remote Environment Handling
+                    console.log('[Debug] Current Hostname:', window.location.hostname);
+                    
+                    if (window.location.hostname.includes('github.dev') || window.location.hostname.includes('gitpod.io')) {
+                         // GitHub Codespaces: port 8080 is usually the frontend, backend on 8000
+                         const currentHost = window.location.hostname;
+                         console.log('[Debug] Detected Codespace/Gitpod environment');
+                         
+                         // Attempt to replace ANY port number in the hostname with -8000
+                         // Regex looks for -<digits> followed by the domain suffix or end of string
+                         // Typical format: name-8080.app.github.dev
+                         const portRegex = /-([0-9]+)(?=\.app\.github\.dev|\.preview\.app\.github\.dev|\.gitpod\.io)/;
+                         const match = currentHost.match(portRegex);
+                         
+                         if (match) {
+                            const currentPort = match[1];
+                            console.log(`[Debug] Detected running on port: ${currentPort}`);
+                            baseUrl = `https://${currentHost.replace(`-${currentPort}`, '-8000')}`;
+                         } else if (currentHost.includes('-8080')) {
+                             // Fallback for simple match
+                             baseUrl = `https://${currentHost.replace('-8080', '-8000')}`;
+                         } else {
+                             console.warn('[Debug] Codespaces detected but port pattern not matched. Defaulting to localhost:8000. Host:', currentHost);
+                         }
+                    } else if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                        // Generic remote handling (e.g. LAN)
+                        baseUrl = window.location.protocol + '//' + window.location.hostname + ':8000';
+                    }
+                    
+                    apiBaseUrl.value = baseUrl;
+                }
+
+                console.log('Checking backend health at:', apiBaseUrl.value);
+                const response = await fetch(`${apiBaseUrl.value}/`, { credentials: 'include' });
+                if (response.ok) {
+                    backendStatus.value = { online: true, lastCheck: new Date() };
+                } else {
+                    throw new Error('Backend returned non-200');
+                }
+            } catch (e) {
+                console.error('Backend health check failed:', e);
+                backendStatus.value = { online: false, lastCheck: new Date() };
+            }
+        };
+
+        // Start checking on mount
+        onMounted(() => {
+            checkBackendHealth();
+            // Poll every 30 seconds
+            setInterval(checkBackendHealth, 30000);
+        });
 
         // YouTube Player API
         const initPlayer = (videoId) => {
-            if (player.value) {
+            if (player.value && typeof player.value.loadVideoById === 'function') {
                 player.value.loadVideoById(videoId);
                 return;
+            }
+
+            // If we have an existing player (even audio), destroy it if switching modes
+            if (player.value) {
+                // If it's a YT player, destroy it properly
+                 if (typeof player.value.destroy === 'function') {
+                    player.value.destroy();
+                 }
+                 player.value = null;
+                 document.getElementById('youtube-player').innerHTML = '';
             }
 
             if (!window.YT) {
@@ -45,17 +135,60 @@ createApp({
             });
         };
 
-        const onPlayerReady = (event) => {
-            // Start polling for time
-            setInterval(() => {
+        // File Audio/Video Player
+        const initFilePlayer = (file) => {
+            // Destroy YouTube player if it exists
+             if (player.value && typeof player.value.destroy === 'function') {
+                 player.value.destroy();
+                 player.value = null;
+             }
+             
+             // Clear container
+             const container = document.getElementById('youtube-player');
+             container.innerHTML = '';
+             container.className = "w-full h-full flex items-center justify-center bg-gray-900";
+
+             // Create Video or Audio element
+             const isVideo = file.type.startsWith('video/');
+             const mediaEl = document.createElement(isVideo ? 'video' : 'audio');
+             mediaEl.src = URL.createObjectURL(file);
+             mediaEl.controls = true;
+             mediaEl.className = "max-w-full max-h-full";
+             mediaEl.style.width = isVideo ? "100%" : "80%"; // Make audio player smaller width
+             
+             container.appendChild(mediaEl);
+             
+             // Wrap into a consistent interface for our app logic
+             player.value = {
+                 getCurrentTime: () => mediaEl.currentTime,
+                 seekTo: (time, allowSeekAhead) => { mediaEl.currentTime = time; },
+                 playVideo: () => mediaEl.play(),
+                 pauseVideo: () => mediaEl.pause(),
+                 // Custom property to identify as non-YT
+                 isNative: true
+             };
+
+             // Start polling loop manually since no 'onReady' event like YT
+             startPolling();
+        };
+
+        const startPolling = () => {
+             // Clear existing interval if any
+             if (window._pollInterval) clearInterval(window._pollInterval);
+
+             window._pollInterval = setInterval(() => {
                 if (player.value && player.value.getCurrentTime) {
                     const time = player.value.getCurrentTime();
-                    if (Math.abs(time - currentTime.value) > 0.1) { // Only update if significant change
+                    if (Math.abs(time - currentTime.value) > 0.1) {
                         currentTime.value = time;
                         updateActiveWords();
                     }
                 }
             }, 100);
+        };
+
+        const onPlayerReady = (event) => {
+            startPolling();
         };
 
         const onPlayerStateChange = (event) => {
@@ -105,38 +238,74 @@ createApp({
         const seekTo = (time) => {
             if (player.value) {
                 player.value.seekTo(time, true);
-                player.value.playVideo();
+                if (player.value.playVideo) player.value.playVideo();
             }
         };
 
-        const processVideo = async () => {
-            if (!videoUrl.value) return;
-            
-            // Extract Video ID
-            const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-            const match = videoUrl.value.match(regExp);
-            
-            if (!match || match[2].length !== 11) {
-                alert('无效的 YouTube 链接');
-                return;
+        const handleFileUpload = (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                selectedFile.value = file;
+                videoUrl.value = ''; // Clear URL if file selected
             }
-            const videoId = match[2];
+        };
+        
+        const handleFileDrop = (event) => {
+            const file = event.dataTransfer.files[0];
+             if (file && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) {
+                selectedFile.value = file;
+                videoUrl.value = '';
+            }
+        };
 
+        const clearFile = () => {
+            selectedFile.value = null;
+            if (fileInput.value) fileInput.value.value = '';
+        };
+
+        const processVideo = async () => {
+            if (!videoUrl.value && !selectedFile.value) return;
+            
             loading.value = true;
             videoData.value = null;
             
             try {
-                // Determine API URL. Ideally this is configurable.
-                // Assuming backend runs on port 8000 on the same host
-                const apiUrl = 'http://localhost:8000/api/process';
-                
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ url: videoUrl.value })
-                });
+                const apiUrl = `${apiBaseUrl.value}/api`;
+                let response;
+                let isFile = !!selectedFile.value;
+                isFileMode.value = isFile;
+
+                if (isFile) {
+                    console.log('[Debug] Attempting upload to:', `${apiUrl}/upload`);
+                    const formData = new FormData();
+                    formData.append('file', selectedFile.value);
+                    
+                    response = await fetch(`${apiUrl}/upload`, {
+                        method: 'POST',
+                        body: formData,
+                        credentials: 'include'
+                    });
+                } else {
+                    // Extract Video ID
+                    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+                    const match = videoUrl.value.match(regExp);
+                    
+                    if (!match || match[2].length !== 11) {
+                        alert('无效的 YouTube 链接');
+                        loading.value = false;
+                        return;
+                    }
+                    const videoId = match[2];
+
+                    response = await fetch(`${apiUrl}/process`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ url: videoUrl.value }),
+                        credentials: 'include'
+                    });
+                }
 
                 if (!response.ok) {
                     throw new Error(`API Error: ${response.statusText}`);
@@ -144,7 +313,12 @@ createApp({
                 
                 const data = await response.json();
                 videoData.value = data;
-                initPlayer(videoId);
+                
+                if (isFile) {
+                    initFilePlayer(selectedFile.value);
+                } else {
+                    initPlayer(data.video_id);
+                }
                 
             } catch (e) {
                 console.error(e);
@@ -163,36 +337,16 @@ createApp({
             seekTo,
             currentSegmentIndex,
             segmentRefs,
-            subtitleContainer
+            subtitleContainer,
+            selectedFile,
+            handleFileUpload,
+            handleFileDrop,
+            clearFile,
+            fileInput,
+            backendStatus,
+            apiBaseUrl,
+            manualUpdateBaseUrl,
+            checkBackendHealth
         };
     }
 }).mount('#app');
-
-function getMockData(videoId) {
-    return {
-        video_id: videoId,
-        title: "Mock Video",
-        segments: [
-            {
-                translation: "今天天气真好啊。",
-                words: [
-                    { text: "今日", reading: "きょう", start: 0, end: 0.5 },
-                    { text: "は", reading: "は", start: 0.5, end: 0.8 },
-                    { text: "いい", reading: "いい", start: 0.8, end: 1.2 },
-                    { text: "天気", reading: "てんき", start: 1.2, end: 1.8 },
-                    { text: "です", reading: "です", start: 1.8, end: 2.2 },
-                    { text: "ね", reading: "ね", start: 2.2, end: 2.5 }
-                ]
-            },
-            {
-                translation: "我们去散步吧。",
-                words: [
-                    { text: "散歩", reading: "さんぽ", start: 3.0, end: 3.5 },
-                    { text: "に", reading: "に", start: 3.5, end: 3.7 },
-                    { text: "行き", reading: "いき", start: 3.7, end: 4.0 },
-                    { text: "ましょう", reading: "ましょう", start: 4.0, end: 4.8 }
-                ]
-            }
-        ]
-    };
-}

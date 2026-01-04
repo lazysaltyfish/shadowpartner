@@ -1,15 +1,29 @@
-import sys
-import os
 try:
-    from main import app
-    print("Successfully imported app")
-    
-    # Also check other critical imports
+    import fastapi
+    print("fastapi imported successfully")
+except ImportError:
+    print("fastapi import failed")
+
+try:
     import yt_dlp
+    print("yt_dlp imported successfully")
+except ImportError:
+    print("yt_dlp import failed")
+
+try:
+    import uvicorn
+    print("uvicorn imported successfully")
+except ImportError:
+    print("uvicorn import failed")
+
+try:
     import whisper
+    print("whisper imported successfully")
+except ImportError:
+    print("whisper import failed")
+
+try:
     import MeCab
-    print("All critical libraries imported successfully")
-    
-except Exception as e:
-    print(f"Error: {e}")
-    sys.exit(1)
+    print("MeCab imported successfully")
+except ImportError:
+    print("MeCab import failed")

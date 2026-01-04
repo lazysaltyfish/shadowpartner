@@ -28,6 +28,7 @@ class VideoDownloader:
             'outtmpl': output_template,
             'quiet': True,
             'no_warnings': True,
+            'verbose': True,
         }
         
         if has_ffmpeg:
@@ -38,6 +39,19 @@ class VideoDownloader:
             }]
         
         try:
+            # Check for proxy environment variable
+            proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+            if proxy:
+                ydl_opts['proxy'] = proxy
+
+            ydl_opts['cookiefile'] = 'cookies.txt'
+            # Add user-agent to avoid being blocked
+            ydl_opts['http_headers'] = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-us,en;q=0.5',
+            }
+                
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 # If we converted, extension is mp3. If not, it's whatever source was (m4a, webm)
