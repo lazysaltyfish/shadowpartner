@@ -11,7 +11,9 @@ createApp({
         const segmentRefs = ref({});
         const subtitleContainer = ref(null);
         const selectedFile = ref(null);
+        const selectedSubtitleFile = ref(null);
         const fileInput = ref(null);
+        const subtitleInput = ref(null);
         const isFileMode = ref(false); // New state to track if we're using file or URL
         const contextRange = ref(2); // Number of segments to show before and after current
         const backendStatus = ref({
@@ -260,10 +262,24 @@ createApp({
 
         const clearFile = () => {
             selectedFile.value = null;
+            selectedSubtitleFile.value = null;
             if (fileInput.value) fileInput.value.value = '';
+            if (subtitleInput.value) subtitleInput.value.value = '';
         };
 
-        const uploadChunks = async (file) => {
+        const handleSubtitleUpload = (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                selectedSubtitleFile.value = file;
+            }
+        };
+
+        const clearSubtitleFile = () => {
+            selectedSubtitleFile.value = null;
+            if (subtitleInput.value) subtitleInput.value.value = '';
+        };
+
+        const uploadChunks = async (file, subtitleFile) => {
             const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB chunks to be safe
             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
             const apiUrl = `${apiBaseUrl.value}/api`;
@@ -306,10 +322,36 @@ createApp({
                 if (!chunkRes.ok) throw new Error(`Failed to upload chunk ${i}`);
             }
             
+            // 2.5. Upload subtitle file if provided (as a single file, not chunked)
+            if (subtitleFile) {
+                taskStatus.value = {
+                    status: 'processing',
+                    progress: 95,
+                    message: 'Uploading subtitle file...'
+                };
+                
+                const subtitleFormData = new FormData();
+                subtitleFormData.append('task_id', task_id);
+                subtitleFormData.append('file', subtitleFile);
+                
+                const subtitleRes = await fetch(`${apiUrl}/upload/subtitle`, {
+                    method: 'POST',
+                    body: subtitleFormData,
+                    credentials: 'include'
+                });
+                
+                if (!subtitleRes.ok) {
+                    console.warn('Failed to upload subtitle, continuing without it');
+                }
+            }
+            
             // 3. Complete
             const completeFormData = new FormData();
             completeFormData.append('task_id', task_id);
             completeFormData.append('filename', file.name);
+            if (subtitleFile) {
+                completeFormData.append('subtitle_filename', subtitleFile.name);
+            }
             
             const completeRes = await fetch(`${apiUrl}/upload/complete`, {
                 method: 'POST',
@@ -358,12 +400,15 @@ createApp({
                     const MAX_SIZE = 5 * 1024 * 1024;
                     if (selectedFile.value.size > MAX_SIZE) {
                         console.log('[Debug] Large file detected, using chunked upload');
-                        const taskId = await uploadChunks(selectedFile.value);
+                        const taskId = await uploadChunks(selectedFile.value, selectedSubtitleFile.value);
                         data = { task_id: taskId };
                     } else {
                         console.log('[Debug] Attempting upload to:', `${apiUrl}/upload`);
                         const formData = new FormData();
                         formData.append('file', selectedFile.value);
+                        if (selectedSubtitleFile.value) {
+                            formData.append('subtitle', selectedSubtitleFile.value);
+                        }
                         
                         response = await fetch(`${apiUrl}/upload`, {
                             method: 'POST',
@@ -430,7 +475,7 @@ createApp({
         };
 
         const pollStatus = async (taskId) => {
-            const pollInterval = 1000; // 1 second
+            const pollInterval = 5000; // 5 seconds
             
             const check = async () => {
                 try {
@@ -520,10 +565,14 @@ createApp({
             segmentRefs,
             subtitleContainer,
             selectedFile,
+            selectedSubtitleFile,
             handleFileUpload,
+            handleSubtitleUpload,
             handleFileDrop,
             clearFile,
+            clearSubtitleFile,
             fileInput,
+            subtitleInput,
             backendStatus,
             apiBaseUrl,
             manualUpdateBaseUrl,

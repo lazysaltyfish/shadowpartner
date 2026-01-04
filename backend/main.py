@@ -168,22 +168,45 @@ async def run_cpu_bound(func, *args, **kwargs):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
-async def process_audio_task(task_id: str, file_path: str, video_id: str, title: str, download_time: float = 0.0):
+async def process_audio_task(task_id: str, file_path: str, video_id: str, title: str, download_time: float = 0.0, subtitle_path: str = None):
+    """
+    Process audio/video file and generate learning segments.
+    
+    Args:
+        task_id: Unique task identifier
+        file_path: Path to the audio/video file
+        video_id: Video identifier
+        title: Video title
+        download_time: Time spent downloading (for metrics)
+        subtitle_path: Optional path to user-provided subtitle file (SRT format).
+                      If provided, skips AI transcription and uses the subtitle directly.
+    """
     start_total = time.time()
     transcribe_time = 0.0
     analysis_time = 0.0
     translation_time = 0.0
     
     try:
-        update_task(task_id, TaskStatus.PROCESSING, 10, "Transcribing audio (this may take a while)...")
-        
-        # 2. Transcribe (Force Japanese)
-        print("Transcribing audio...")
-        t0 = time.time()
-        # Run synchronous transcribe in a thread
-        result = await run_cpu_bound(transcriber.transcribe, file_path, language="ja")
-        whisper_segments = result['segments']
-        transcribe_time = time.time() - t0
+        # 2. Transcribe or load user-provided subtitle
+        if subtitle_path and os.path.exists(subtitle_path):
+            # User provided subtitle - skip AI transcription
+            update_task(task_id, TaskStatus.PROCESSING, 10, "Loading user-provided subtitle...")
+            print("Loading user-provided subtitle file...")
+            t0 = time.time()
+            # Run synchronous load_subtitle in a thread
+            result = await run_cpu_bound(transcriber.load_subtitle, subtitle_path)
+            whisper_segments = result['segments']
+            transcribe_time = time.time() - t0
+            print(f"Loaded {len(whisper_segments)} segments from user subtitle.")
+        else:
+            # No subtitle provided - use AI transcription
+            update_task(task_id, TaskStatus.PROCESSING, 10, "Transcribing audio (this may take a while)...")
+            print("Transcribing audio...")
+            t0 = time.time()
+            # Run synchronous transcribe in a thread
+            result = await run_cpu_bound(transcriber.transcribe, file_path, language="ja")
+            whisper_segments = result['segments']
+            transcribe_time = time.time() - t0
         
         update_task(task_id, TaskStatus.PROCESSING, 40, "Analyzing Japanese text...")
         
@@ -284,10 +307,16 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
         traceback.print_exc()
         update_task(task_id, TaskStatus.FAILED, 0, "Processing failed", error=str(e))
     finally:
-         # Cleanup
+        # Cleanup audio/video file
         if file_path and os.path.exists(file_path):
             try:
                 os.remove(file_path)
+            except:
+                pass
+        # Cleanup subtitle file if provided
+        if subtitle_path and os.path.exists(subtitle_path):
+            try:
+                os.remove(subtitle_path)
             except:
                 pass
 
@@ -393,8 +422,38 @@ async def upload_chunk(
     tasks[task_id].message = f"Uploaded chunk {chunk_index + 1}"
     return {"status": "success"}
 
+@app.post("/api/upload/subtitle")
+async def upload_subtitle(
+    task_id: str = Form(...),
+    file: UploadFile = File(...)
+):
+    """
+    Upload a subtitle file for an existing chunked upload session.
+    The subtitle file will be saved with the naming convention {task_id}_subtitle.{ext}
+    """
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    upload_dir = "temp"
+    if not os.path.exists(upload_dir):
+        os.makedirs(upload_dir)
+    
+    # Save subtitle file with task_id prefix
+    subtitle_ext = os.path.splitext(file.filename)[1] or ".srt"
+    subtitle_path = os.path.join(upload_dir, f"{task_id}_subtitle{subtitle_ext}")
+    
+    with open(subtitle_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    
+    print(f"Subtitle uploaded for task {task_id}: {subtitle_path}")
+    return {"status": "success", "path": subtitle_path}
+
 @app.post("/api/upload/complete", response_model=AsyncProcessResponse)
-async def complete_upload(task_id: str = Form(...), filename: str = Form(...)):
+async def complete_upload(
+    task_id: str = Form(...), 
+    filename: str = Form(...),
+    subtitle_filename: Optional[str] = Form(None)
+):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
     
@@ -405,6 +464,15 @@ async def complete_upload(task_id: str = Form(...), filename: str = Form(...)):
     
     temp_file = os.path.join(upload_dir, files[0])
     
+    # Check for subtitle file
+    subtitle_path = None
+    if subtitle_filename:
+        # Look for the corresponding subtitle part file, which we assume was uploaded with the same task_id
+        subtitle_files = [f for f in os.listdir(upload_dir) if f.startswith(f"{task_id}_subtitle")]
+        if subtitle_files:
+            subtitle_path = os.path.join(upload_dir, subtitle_files[0])
+            print(f"Found subtitle for completion: {subtitle_path}")
+
     tasks[task_id].status = TaskStatus.PENDING
     tasks[task_id].message = "Upload complete. Processing..."
     
@@ -412,13 +480,36 @@ async def complete_upload(task_id: str = Form(...), filename: str = Form(...)):
     # Reuse process_audio_task
     # Note: we need a video_id (we use task_id as session id)
     # upload time considered 0 for now as it happened before
-    asyncio.create_task(process_audio_task(task_id, temp_file, task_id, filename, download_time=0.0))
+    asyncio.create_task(process_audio_task(
+        task_id, 
+        temp_file, 
+        task_id, 
+        filename, 
+        download_time=0.0,
+        subtitle_path=subtitle_path
+    ))
     
     return AsyncProcessResponse(task_id=task_id, message="Processing started")
 
 @app.post("/api/upload", response_model=AsyncProcessResponse)
-async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_video(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    subtitle: Optional[UploadFile] = File(None)
+):
+    """
+    Upload audio/video file for processing.
+    
+    Args:
+        file: The audio/video file to process (required)
+        subtitle: Optional subtitle file in SRT format. If provided, AI transcription
+                 will be skipped and the provided subtitle will be used instead.
+    
+    Returns:
+        AsyncProcessResponse with task_id for tracking progress
+    """
     temp_file = None
+    subtitle_file = None
     try:
         # Save uploaded file immediately
         upload_dir = "temp"
@@ -435,16 +526,37 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
             
         print(f"File uploaded to: {temp_file}")
         
+        # Save subtitle file if provided
+        if subtitle and subtitle.filename:
+            subtitle_ext = os.path.splitext(subtitle.filename)[1] or ".srt"
+            subtitle_file = os.path.join(upload_dir, f"{session_id}_subtitle{subtitle_ext}")
+            
+            with open(subtitle_file, "wb") as buffer:
+                shutil.copyfileobj(subtitle.file, buffer)
+                
+            print(f"Subtitle uploaded to: {subtitle_file}")
+        
         # Start async task
         task_id = str(uuid.uuid4())
-        tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="File uploaded. Queued for processing...")
+        
+        if subtitle_file:
+            tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="Files uploaded. Using provided subtitle...")
+        else:
+            tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="File uploaded. Queued for processing...")
         
         # Pass the file path to background task
         # IMPORTANT: The file is already on disk, so the background task can access it.
         # We don't need to keep the 'file' object open.
         
         import asyncio
-        asyncio.create_task(process_audio_task(task_id, temp_file, session_id, file.filename, download_time=0.0))
+        asyncio.create_task(process_audio_task(
+            task_id,
+            temp_file,
+            session_id,
+            file.filename,
+            download_time=0.0,
+            subtitle_path=subtitle_file
+        ))
         
         return AsyncProcessResponse(task_id=task_id, message="File uploaded, processing started")
 
@@ -452,9 +564,14 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
         print(f"Error processing uploaded file: {e}")
         # Cleanup if we failed before starting task
         if temp_file and os.path.exists(temp_file):
-             try:
+            try:
                 os.remove(temp_file)
-             except:
+            except:
+                pass
+        if subtitle_file and os.path.exists(subtitle_file):
+            try:
+                os.remove(subtitle_file)
+            except:
                 pass
         raise HTTPException(status_code=500, detail=str(e))
 
