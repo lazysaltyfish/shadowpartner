@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project Specific - Backend
+backend/bin/
+backend/temp/
+*.mp3
+*.webm
+*.m4a
+*.wav
+
+# Project Specific - Frontend
+# (Nothing specific to ignore for this simple frontend yet, maybe node_modules if we had them)
+node_modules/
+dist/
+
+# Logs
+*.log

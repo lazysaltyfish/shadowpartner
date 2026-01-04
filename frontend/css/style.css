@@ -1,0 +1,4 @@
+/* Custom Styles */
+ruby rt {
+  user-select: none; /* 防止复制文本时选中注音 */
+}
