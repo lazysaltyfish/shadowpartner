@@ -1,4 +1,4 @@
-const { createApp, ref, onMounted, nextTick } = Vue;
+const { createApp, ref, onMounted, nextTick, computed } = Vue;
 
 createApp({
     setup() {
@@ -223,17 +223,11 @@ createApp({
 
             if (foundSegment !== -1 && foundSegment !== currentSegmentIndex.value) {
                 currentSegmentIndex.value = foundSegment;
-                scrollToSegment(foundSegment);
             }
         };
 
         const scrollToSegment = (index) => {
-            nextTick(() => {
-                const el = segmentRefs.value[index];
-                if (el && subtitleContainer.value) {
-                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }
-            });
+            // Deprecated: automatic view limiting handles visibility
         };
 
         const isWordActive = (word) => {
