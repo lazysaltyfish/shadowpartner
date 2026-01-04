@@ -69,6 +69,7 @@
                 <div class="flex gap-4 items-center justify-center p-6 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-500 transition-colors"
                      @dragover.prevent
                      @drop.prevent="handleFileDrop"
+                     v-if="!loading"
                 >
                     <input 
                         type="file" 
@@ -89,6 +90,17 @@
                         <button @click="clearFile" class="text-red-500 hover:text-red-700 p-1">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                         </button>
+                    </div>
+                </div>
+
+                <!-- Progress Bar -->
+                <div v-if="loading && taskStatus" class="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-100">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-sm font-medium text-blue-800">{{ taskStatus.message }}</span>
+                        <span class="text-sm font-bold text-blue-600">{{ taskStatus.progress }}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                        <div class="bg-blue-600 h-2.5 rounded-full transition-all duration-500 ease-out" :style="{ width: taskStatus.progress + '%' }"></div>
                     </div>
                 </div>
             </div>

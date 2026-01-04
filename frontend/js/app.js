@@ -17,6 +17,7 @@ createApp({
             online: false,
             lastCheck: null
         });
+        const taskStatus = ref(null); // { status: 'pending', progress: 0, message: '' }
         const apiBaseUrl = ref('http://localhost:8000');
 
         const manualUpdateBaseUrl = () => {
@@ -268,6 +269,7 @@ createApp({
             
             loading.value = true;
             videoData.value = null;
+            taskStatus.value = { status: 'pending', progress: 0, message: 'Initializing...' };
             
             try {
                 const apiUrl = `${apiBaseUrl.value}/api`;
@@ -312,20 +314,64 @@ createApp({
                 }
                 
                 const data = await response.json();
-                videoData.value = data;
                 
-                if (isFile) {
-                    initFilePlayer(selectedFile.value);
+                // Start polling for status
+                if (data.task_id) {
+                     console.log('[Debug] Received task_id:', data.task_id);
+                     await pollStatus(data.task_id);
                 } else {
-                    initPlayer(data.video_id);
+                    // Fallback for immediate response (though backend is now async)
+                    videoData.value = data;
+                    if (isFile) {
+                        initFilePlayer(selectedFile.value);
+                    } else {
+                        initPlayer(data.video_id);
+                    }
+                    loading.value = false;
                 }
                 
             } catch (e) {
                 console.error(e);
                 alert(`处理失败: ${e.message}`);
-            } finally {
                 loading.value = false;
             }
+        };
+
+        const pollStatus = async (taskId) => {
+            const pollInterval = 1000; // 1 second
+            
+            const check = async () => {
+                try {
+                    const response = await fetch(`${apiBaseUrl.value}/api/status/${taskId}`, { credentials: 'include' });
+                    if (!response.ok) {
+                        throw new Error("Failed to get status");
+                    }
+                    const statusData = await response.json();
+                    taskStatus.value = statusData;
+                    
+                    if (statusData.status === 'completed') {
+                        videoData.value = statusData.result;
+                        if (isFileMode.value) {
+                            initFilePlayer(selectedFile.value);
+                        } else {
+                            initPlayer(statusData.result.video_id);
+                        }
+                        loading.value = false;
+                    } else if (statusData.status === 'failed') {
+                         throw new Error(statusData.error || "Processing failed");
+                    } else {
+                        // Continue polling
+                        setTimeout(check, pollInterval);
+                    }
+                } catch (e) {
+                    console.error("Polling error:", e);
+                    alert(`处理出错: ${e.message}`);
+                    loading.value = false;
+                }
+            };
+            
+            // Start polling
+            check();
         };
 
         return {
@@ -346,7 +392,8 @@ createApp({
             backendStatus,
             apiBaseUrl,
             manualUpdateBaseUrl,
-            checkBackendHealth
+            checkBackendHealth,
+            taskStatus
         };
     }
 }).mount('#app');

@@ -1,10 +1,12 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import os
 import shutil
 import uuid
+from enum import Enum
+import time
 
 # Import Services
 # Note: Ensure these files exist and are in python path
@@ -37,14 +39,64 @@ async def log_requests(request: Request, call_next):
 # Configure CORS
 # Note: allow_origins=["*"] cannot be used with allow_credentials=True in strict browsers
 # We use allow_origin_regex to match Codespaces/Gitpod domains dynamically
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r"https://.*\.app\.github\.dev|https://.*\.gitpod\.io",
-    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:5500", "http://127.0.0.1:5500"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# app.add_middleware(
+#     CORSMiddleware,
+#     # Updated regex to be more permissive for various github codespaces subdomains
+#     allow_origin_regex=r"https://.*\.app\.github\.dev|https://.*\.gitpod\.io",
+#     # Added explicit port 3000 which is common for some frontend dev servers
+#     allow_origins=["http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:5500", "http://127.0.0.1:5500", "http://localhost:3000"],
+#     allow_credentials=True,
+#     allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"],
+#     allow_headers=["*"],
+# )
+
+@app.middleware("http")
+async def add_cors_headers(request: Request, call_next):
+    # Handle preflight requests
+    if request.method == "OPTIONS":
+        response = fastapi.Response()
+    else:
+        try:
+            response = await call_next(request)
+        except Exception as e:
+            print(f"Request failed: {e}")
+            # Ensure we still return a response to attach headers to, even on error
+            response = fastapi.Response(status_code=500)
+            
+    origin = request.headers.get("origin")
+    
+    # If no origin, we can just return (e.g. server-side curl)
+    # But for browser requests, we mirror the origin
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+    else:
+        # Fallback for some cases where Origin might be missing but we want to be permissive
+        # Note: '*' cannot be used with credentials: true
+        pass 
+    
+    return response
+
+import fastapi
+
+class TaskStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class TaskInfo(BaseModel):
+    task_id: str
+    status: TaskStatus
+    progress: int = 0  # 0 to 100
+    message: str = "Waiting to start..."
+    result: Optional[Any] = None
+    error: Optional[str] = None
+
+# In-memory task store (Use Redis/DB in production)
+tasks: Dict[str, TaskInfo] = {}
 
 class VideoRequest(BaseModel):
     url: str
@@ -66,6 +118,10 @@ class VideoResponse(BaseModel):
     title: str
     segments: List[Segment]
 
+class AsyncProcessResponse(BaseModel):
+    task_id: str
+    message: str
+
 # Initialize Services
 # We initialize them here so they are ready when requests come in
 try:
@@ -79,60 +135,87 @@ except Exception as e:
     print(f"CRITICAL: Failed to initialize services: {e}")
     # We don't exit, but endpoints might fail
 
-@app.get("/")
-async def root():
-    return {"message": "ShadowPartner API is running"}
+def update_task(task_id: str, status: TaskStatus, progress: int = 0, message: str = "", result: Any = None, error: str = None):
+    if task_id in tasks:
+        tasks[task_id].status = status
+        tasks[task_id].progress = progress
+        tasks[task_id].message = message
+        if result:
+            tasks[task_id].result = result
+        if error:
+            tasks[task_id].error = error
 
-async def process_audio_file(file_path: str, video_id: str, title: str):
+async def run_cpu_bound(func, *args, **kwargs):
+    import asyncio
+    from functools import partial
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, partial(func, *args, **kwargs))
+
+async def process_audio_task(task_id: str, file_path: str, video_id: str, title: str):
     try:
+        update_task(task_id, TaskStatus.PROCESSING, 10, "Transcribing audio (this may take a while)...")
+        
         # 2. Transcribe (Force Japanese)
         print("Transcribing audio...")
-        result = transcriber.transcribe(file_path, language="ja")
+        # Run synchronous transcribe in a thread
+        result = await run_cpu_bound(transcriber.transcribe, file_path, language="ja")
         whisper_segments = result['segments']
+        
+        update_task(task_id, TaskStatus.PROCESSING, 40, "Analyzing Japanese text...")
         
         # 3. Process Segments (Analyze & Align)
         print(f"Analyzing {len(whisper_segments)} segments...")
         final_segments = []
         raw_texts = []
         
-        for seg in whisper_segments:
-            text = seg['text'].strip()
-            # Whisper sometimes outputs empty segments
-            if not text:
-                continue
+        total_segments = len(whisper_segments)
+        
+        # We can also offload the analysis loop if it's heavy, but let's see. 
+        # For now, let's keep it in the loop but yield control occasionally if needed.
+        # However, MeCab analysis IS CPU bound.
+        
+        def analyze_segments(segments):
+            processed_segments = []
+            texts = []
+            for i, seg in enumerate(segments):
+                # We can't update task progress easily from inside this sync function without callback
+                # So we might split this up.
+                text = seg['text'].strip()
+                if not text:
+                    continue
+                texts.append(text)
+                whisper_words = seg.get('words', [])
+                mecab_tokens = analyzer.analyze(text)
+                aligned_tokens = aligner.align(whisper_words, mecab_tokens)
                 
-            raw_texts.append(text)
-            
-            # Whisper words for this segment
-            whisper_words = seg.get('words', [])
-            
-            # MeCab Analysis
-            mecab_tokens = analyzer.analyze(text)
-            
-            # Align
-            aligned_tokens = aligner.align(whisper_words, mecab_tokens)
-            
-            # Convert to Pydantic model format
-            words_model = []
-            for t in aligned_tokens:
-                words_model.append(Word(
-                    text=t['text'],
-                    reading=t.get('reading', ''),
-                    # Ensure defaults if alignment failed totally
-                    start=t.get('start') or 0.0,
-                    end=t.get('end') or 0.0
+                words_model = []
+                for t in aligned_tokens:
+                    words_model.append(Word(
+                        text=t['text'],
+                        reading=t.get('reading', ''),
+                        start=t.get('start') or 0.0,
+                        end=t.get('end') or 0.0
+                    ))
+                
+                processed_segments.append(Segment(
+                    words=words_model,
+                    translation="", 
+                    start=seg['start'],
+                    end=seg['end']
                 ))
-                
-            final_segments.append(Segment(
-                words=words_model,
-                translation="", # Placeholder
-                start=seg['start'],
-                end=seg['end']
-            ))
-            
+            return processed_segments, texts
+
+        # Run analysis in thread
+        final_segments, raw_texts = await run_cpu_bound(analyze_segments, whisper_segments)
+
+        update_task(task_id, TaskStatus.PROCESSING, 70, "Translating to Chinese...")
+
         # 4. Translate
         print("Translating segments...")
-        translations = translator.translate_batch(raw_texts)
+        # Translation involves network I/O but the client might be sync or async. 
+        # Our new translator uses google-genai which might be sync or async depending on usage.
+        # We implemented it as synchronous calls. So offload it.
+        translations = await run_cpu_bound(translator.translate_batch, raw_texts)
         
         # Map translations back (handle potential length mismatch gracefully)
         for i, trans in enumerate(translations):
@@ -140,54 +223,83 @@ async def process_audio_file(file_path: str, video_id: str, title: str):
                 final_segments[i].translation = trans
             
         print("Processing complete.")
-        return VideoResponse(
+        
+        final_response = VideoResponse(
             video_id=video_id,
             title=title,
             segments=final_segments
         )
+        
+        update_task(task_id, TaskStatus.COMPLETED, 100, "Completed", result=final_response)
+
     except Exception as e:
         print(f"Error processing audio: {e}")
         import traceback
         traceback.print_exc()
-        raise e
-
-@app.post("/api/process", response_model=VideoResponse)
-async def process_video(request: VideoRequest):
-    temp_file = None
-    try:
-        # 1. Download
-        print(f"Processing URL: {request.url}")
-        temp_file, info = downloader.download_audio(request.url)
-        video_title = info.get('title', 'Unknown Video')
-        video_id = info.get('id', 'unknown_id')
-        
-        return await process_audio_file(temp_file, video_id, video_title)
-
-    except Exception as e:
-        print(f"Error processing video: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        update_task(task_id, TaskStatus.FAILED, 0, "Processing failed", error=str(e))
     finally:
-        # Cleanup
-        if temp_file and os.path.exists(temp_file):
+         # Cleanup
+        if file_path and os.path.exists(file_path):
             try:
-                os.remove(temp_file)
+                os.remove(file_path)
             except:
                 pass
 
-@app.post("/api/upload", response_model=VideoResponse)
-async def upload_video(file: UploadFile = File(...)):
+
+@app.get("/api/status/{task_id}", response_model=TaskInfo)
+async def get_task_status(task_id: str):
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return tasks[task_id]
+
+@app.get("/")
+async def root():
+    return {"message": "ShadowPartner API is running"}
+
+
+
+@app.post("/api/process", response_model=AsyncProcessResponse)
+async def process_video(request: VideoRequest, background_tasks: BackgroundTasks):
+    try:
+        task_id = str(uuid.uuid4())
+        tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="Downloading video...")
+        
+        # 1. Download (Synchronous part to fail fast if URL invalid, or could be async too)
+        # Moving download to background to avoid timeout
+        import asyncio
+        asyncio.create_task(download_and_process(task_id, request.url))
+        
+        return AsyncProcessResponse(task_id=task_id, message="Video processing started")
+
+    except Exception as e:
+        print(f"Error starting video processing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def download_and_process(task_id: str, url: str):
     temp_file = None
     try:
-        # Save uploaded file
+        update_task(task_id, TaskStatus.PROCESSING, 5, "Downloading video...")
+        print(f"Processing URL: {url}")
+        temp_file, info = downloader.download_audio(url)
+        video_title = info.get('title', 'Unknown Video')
+        video_id = info.get('id', 'unknown_id')
+        
+        await process_audio_task(task_id, temp_file, video_id, video_title)
+    except Exception as e:
+         update_task(task_id, TaskStatus.FAILED, 0, "Download failed", error=str(e))
+
+
+@app.post("/api/upload", response_model=AsyncProcessResponse)
+async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    temp_file = None
+    try:
+        # Save uploaded file immediately
         upload_dir = "temp"
         if not os.path.exists(upload_dir):
             os.makedirs(upload_dir)
             
         session_id = str(uuid.uuid4())
         # Use mp3 extension as we will process it as audio
-        # But we should respect original extension or just save it and let ffmpeg/whisper handle
         ext = os.path.splitext(file.filename)[1] or ".mp3"
         temp_file = os.path.join(upload_dir, f"{session_id}{ext}")
         
@@ -196,18 +308,28 @@ async def upload_video(file: UploadFile = File(...)):
             
         print(f"File uploaded to: {temp_file}")
         
-        # Use session_id as video_id for uploaded content
-        return await process_audio_file(temp_file, session_id, file.filename)
+        # Start async task
+        task_id = str(uuid.uuid4())
+        tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="File uploaded. Queued for processing...")
+        
+        # Pass the file path to background task
+        # IMPORTANT: The file is already on disk, so the background task can access it.
+        # We don't need to keep the 'file' object open.
+        
+        import asyncio
+        asyncio.create_task(process_audio_task(task_id, temp_file, session_id, file.filename))
+        
+        return AsyncProcessResponse(task_id=task_id, message="File uploaded, processing started")
 
     except Exception as e:
         print(f"Error processing uploaded file: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
+        # Cleanup if we failed before starting task
         if temp_file and os.path.exists(temp_file):
-            try:
+             try:
                 os.remove(temp_file)
-            except:
+             except:
                 pass
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
