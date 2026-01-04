@@ -21,7 +21,8 @@ class Translator:
             self.client = genai.Client(api_key=API_KEY)
         self.available = bool(API_KEY)
         self.model_id = os.environ.get("GEMINI_MODEL_ID", "gemini-3-flash-preview")
-        logger.info(f"Translator initialized with model: {self.model_id}")
+        self.chunk_size = int(os.environ.get("TRANSLATE_BATCH_CHUNK_SIZE", 50))
+        logger.info(f"Translator initialized with model: {self.model_id}, chunk size: {self.chunk_size}")
 
     def translate(self, text: str, target_lang: str = "Chinese") -> str:
         if not self.available:
@@ -57,13 +58,12 @@ class Translator:
             
         logger.info(f"Starting batch translation. Total items: {len(texts)}")
             
-        # Process in chunks of 20 lines to avoid token limits or confusion
-        CHUNK_SIZE = 20
+        # Process in chunks to avoid token limits or confusion
         all_results = []
         
-        for i in range(0, len(texts), CHUNK_SIZE):
-            chunk = texts[i:i + CHUNK_SIZE]
-            logger.info(f"Processing chunk {i//CHUNK_SIZE + 1} ({len(chunk)} items)...")
+        for i in range(0, len(texts), self.chunk_size):
+            chunk = texts[i:i + self.chunk_size]
+            logger.info(f"Processing chunk {i//self.chunk_size + 1} ({len(chunk)} items)...")
             
             # Format:
             # 1. <text>
@@ -104,7 +104,7 @@ class Translator:
                     all_results.append(chunk_map.get(j, "[翻译缺失]"))
                     
             except Exception as e:
-                logger.error(f"Gemini batch translation error in chunk {i//CHUNK_SIZE + 1}: {e}")
+                logger.error(f"Gemini batch translation error in chunk {i//self.chunk_size + 1}: {e}")
                 # Fallback: append error messages for this chunk
                 all_results.extend(["[翻译错误]"] * len(chunk))
         
