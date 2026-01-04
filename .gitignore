@@ -25,6 +25,7 @@ backend/temp/
 *.webm
 *.m4a
 *.wav
+.env
 
 # Project Specific - Frontend
 # (Nothing specific to ignore for this simple frontend yet, maybe node_modules if we had them)

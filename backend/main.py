@@ -7,6 +7,10 @@ import shutil
 import uuid
 from enum import Enum
 import time
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Import Services
 # Note: Ensure these files exist and are in python path
@@ -125,12 +129,17 @@ class AsyncProcessResponse(BaseModel):
 # Initialize Services
 # We initialize them here so they are ready when requests come in
 try:
+    # Check for configuration via Env Vars
+    whisper_device = os.getenv("WHISPER_DEVICE", None) # Default to None (Auto)
+    whisper_fp16 = os.getenv("WHISPER_FP16", "False").lower() == "true"
+    whisper_model_size = os.getenv("WHISPER_MODEL_SIZE", "base")
+    
     downloader = VideoDownloader()
-    transcriber = AudioTranscriber()
+    transcriber = AudioTranscriber(model_size=whisper_model_size, device=whisper_device, fp16=whisper_fp16)
     analyzer = JapaneseAnalyzer()
     aligner = Aligner()
     translator = Translator()
-    print("All services initialized successfully.")
+    print(f"All services initialized successfully. Transcriber running on {transcriber.device} (fp16={transcriber.fp16}, model={transcriber.model_size})")
 except Exception as e:
     print(f"CRITICAL: Failed to initialize services: {e}")
     # We don't exit, but endpoints might fail
