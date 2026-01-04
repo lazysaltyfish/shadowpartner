@@ -443,6 +443,13 @@ createApp({
                     
                     if (statusData.status === 'completed') {
                         console.log('[Debug] Task completed. Result:', statusData.result);
+
+                        // Log metrics if they exist
+                        if (statusData.result.metrics) {
+                            console.log('%c ✨ Metrics ✨', 'color: #22C55E; font-size: 1.2em; font-weight: bold; padding: 5px;');
+                            console.table(statusData.result.metrics);
+                        }
+
                         videoData.value = statusData.result;
                         loading.value = false; // Turn off loading BEFORE initPlayer
                         

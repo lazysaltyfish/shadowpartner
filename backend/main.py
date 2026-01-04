@@ -105,6 +105,13 @@ tasks: Dict[str, TaskInfo] = {}
 class VideoRequest(BaseModel):
     url: str
 
+class ProcessingMetrics(BaseModel):
+    download_time: float = 0.0
+    transcribe_time: float = 0.0
+    analysis_time: float = 0.0
+    translation_time: float = 0.0
+    total_time: float = 0.0
+
 class Word(BaseModel):
     text: str
     reading: Optional[str] = None
@@ -121,6 +128,7 @@ class VideoResponse(BaseModel):
     video_id: str
     title: str
     segments: List[Segment]
+    metrics: Optional[ProcessingMetrics] = None
 
 class AsyncProcessResponse(BaseModel):
     task_id: str
@@ -160,15 +168,22 @@ async def run_cpu_bound(func, *args, **kwargs):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
-async def process_audio_task(task_id: str, file_path: str, video_id: str, title: str):
+async def process_audio_task(task_id: str, file_path: str, video_id: str, title: str, download_time: float = 0.0):
+    start_total = time.time()
+    transcribe_time = 0.0
+    analysis_time = 0.0
+    translation_time = 0.0
+    
     try:
         update_task(task_id, TaskStatus.PROCESSING, 10, "Transcribing audio (this may take a while)...")
         
         # 2. Transcribe (Force Japanese)
         print("Transcribing audio...")
+        t0 = time.time()
         # Run synchronous transcribe in a thread
         result = await run_cpu_bound(transcriber.transcribe, file_path, language="ja")
         whisper_segments = result['segments']
+        transcribe_time = time.time() - t0
         
         update_task(task_id, TaskStatus.PROCESSING, 40, "Analyzing Japanese text...")
         
@@ -215,16 +230,20 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
             return processed_segments, texts
 
         # Run analysis in thread
+        t0 = time.time()
         final_segments, raw_texts = await run_cpu_bound(analyze_segments, whisper_segments)
+        analysis_time = time.time() - t0
 
         update_task(task_id, TaskStatus.PROCESSING, 70, "Translating to Chinese...")
 
         # 4. Translate
         print("Translating segments...")
+        t0 = time.time()
         # Translation involves network I/O but the client might be sync or async. 
         # Our new translator uses google-genai which might be sync or async depending on usage.
         # We implemented it as synchronous calls. So offload it.
         translations = await run_cpu_bound(translator.translate_batch, raw_texts)
+        translation_time = time.time() - t0
         
         # Map translations back (handle potential length mismatch gracefully)
         for i, trans in enumerate(translations):
@@ -233,10 +252,28 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
             
         print("Processing complete.")
         
+        total_time = (time.time() - start_total) + download_time
+        
+        metrics = ProcessingMetrics(
+            download_time=download_time,
+            transcribe_time=transcribe_time,
+            analysis_time=analysis_time,
+            translation_time=translation_time,
+            total_time=total_time
+        )
+        
+        print(f"[Metrics] Task {task_id} Completed. "
+              f"Download: {metrics.download_time:.2f}s, "
+              f"Transcribe: {metrics.transcribe_time:.2f}s, "
+              f"Analysis: {metrics.analysis_time:.2f}s, "
+              f"Translation: {metrics.translation_time:.2f}s, "
+              f"Total: {metrics.total_time:.2f}s")
+        
         final_response = VideoResponse(
             video_id=video_id,
             title=title,
-            segments=final_segments
+            segments=final_segments,
+            metrics=metrics
         )
         
         update_task(task_id, TaskStatus.COMPLETED, 100, "Completed", result=final_response)
@@ -289,11 +326,15 @@ async def download_and_process(task_id: str, url: str):
     try:
         update_task(task_id, TaskStatus.PROCESSING, 5, "Downloading video...")
         print(f"Processing URL: {url}")
+        
+        t0 = time.time()
         temp_file, info = downloader.download_audio(url)
+        download_time = time.time() - t0
+        
         video_title = info.get('title', 'Unknown Video')
         video_id = info.get('id', 'unknown_id')
         
-        await process_audio_task(task_id, temp_file, video_id, video_title)
+        await process_audio_task(task_id, temp_file, video_id, video_title, download_time=download_time)
     except Exception as e:
          update_task(task_id, TaskStatus.FAILED, 0, "Download failed", error=str(e))
 
@@ -370,7 +411,8 @@ async def complete_upload(task_id: str = Form(...), filename: str = Form(...)):
     import asyncio
     # Reuse process_audio_task
     # Note: we need a video_id (we use task_id as session id)
-    asyncio.create_task(process_audio_task(task_id, temp_file, task_id, filename))
+    # upload time considered 0 for now as it happened before
+    asyncio.create_task(process_audio_task(task_id, temp_file, task_id, filename, download_time=0.0))
     
     return AsyncProcessResponse(task_id=task_id, message="Processing started")
 
@@ -402,7 +444,7 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
         # We don't need to keep the 'file' object open.
         
         import asyncio
-        asyncio.create_task(process_audio_task(task_id, temp_file, session_id, file.filename))
+        asyncio.create_task(process_audio_task(task_id, temp_file, session_id, file.filename, download_time=0.0))
         
         return AsyncProcessResponse(task_id=task_id, message="File uploaded, processing started")
 
