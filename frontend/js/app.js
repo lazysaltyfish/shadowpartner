@@ -146,31 +146,35 @@ createApp({
              
              // Clear container
              const container = document.getElementById('youtube-player');
-             container.innerHTML = '';
-             container.className = "w-full h-full flex items-center justify-center bg-gray-900";
+             if (container) {
+                 container.innerHTML = '';
+                 container.className = "w-full h-full flex items-center justify-center bg-gray-900";
 
-             // Create Video or Audio element
-             const isVideo = file.type.startsWith('video/');
-             const mediaEl = document.createElement(isVideo ? 'video' : 'audio');
-             mediaEl.src = URL.createObjectURL(file);
-             mediaEl.controls = true;
-             mediaEl.className = "max-w-full max-h-full";
-             mediaEl.style.width = isVideo ? "100%" : "80%"; // Make audio player smaller width
-             
-             container.appendChild(mediaEl);
-             
-             // Wrap into a consistent interface for our app logic
-             player.value = {
-                 getCurrentTime: () => mediaEl.currentTime,
-                 seekTo: (time, allowSeekAhead) => { mediaEl.currentTime = time; },
-                 playVideo: () => mediaEl.play(),
-                 pauseVideo: () => mediaEl.pause(),
-                 // Custom property to identify as non-YT
-                 isNative: true
-             };
+                 // Create Video or Audio element
+                 const isVideo = file.type.startsWith('video/');
+                 const mediaEl = document.createElement(isVideo ? 'video' : 'audio');
+                 mediaEl.src = URL.createObjectURL(file);
+                 mediaEl.controls = true;
+                 mediaEl.className = "max-w-full max-h-full";
+                 mediaEl.style.width = isVideo ? "100%" : "80%"; // Make audio player smaller width
+                 
+                 container.appendChild(mediaEl);
+                 
+                 // Wrap into a consistent interface for our app logic
+                 player.value = {
+                     getCurrentTime: () => mediaEl.currentTime,
+                     seekTo: (time, allowSeekAhead) => { mediaEl.currentTime = time; },
+                     playVideo: () => mediaEl.play(),
+                     pauseVideo: () => mediaEl.pause(),
+                     // Custom property to identify as non-YT
+                     isNative: true
+                 };
 
-             // Start polling loop manually since no 'onReady' event like YT
-             startPolling();
+                 // Start polling loop manually since no 'onReady' event like YT
+                 startPolling();
+             } else {
+                 console.error("Player container not found");
+             }
         };
 
         const startPolling = () => {
@@ -264,6 +268,64 @@ createApp({
             if (fileInput.value) fileInput.value.value = '';
         };
 
+        const uploadChunks = async (file) => {
+            const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB chunks to be safe
+            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+            const apiUrl = `${apiBaseUrl.value}/api`;
+            
+            // 1. Init
+            const initFormData = new FormData();
+            initFormData.append('filename', file.name);
+            const initRes = await fetch(`${apiUrl}/upload/init`, {
+                method: 'POST',
+                body: initFormData,
+                credentials: 'include'
+            });
+            if (!initRes.ok) throw new Error("Failed to init upload");
+            const { task_id } = await initRes.json();
+            
+            // 2. Upload Chunks
+            for (let i = 0; i < totalChunks; i++) {
+                const start = i * CHUNK_SIZE;
+                const end = Math.min(file.size, start + CHUNK_SIZE);
+                const chunk = file.slice(start, end);
+                
+                const chunkFormData = new FormData();
+                chunkFormData.append('task_id', task_id);
+                chunkFormData.append('chunk_index', i);
+                chunkFormData.append('file', chunk);
+                
+                // Update UI progress artificially for upload phase
+                taskStatus.value = {
+                    status: 'processing',
+                    progress: Math.floor((i / totalChunks) * 100),
+                    message: `Uploading part ${i+1}/${totalChunks}...`
+                };
+                
+                const chunkRes = await fetch(`${apiUrl}/upload/chunk`, {
+                    method: 'POST',
+                    body: chunkFormData,
+                    credentials: 'include'
+                });
+                
+                if (!chunkRes.ok) throw new Error(`Failed to upload chunk ${i}`);
+            }
+            
+            // 3. Complete
+            const completeFormData = new FormData();
+            completeFormData.append('task_id', task_id);
+            completeFormData.append('filename', file.name);
+            
+            const completeRes = await fetch(`${apiUrl}/upload/complete`, {
+                method: 'POST',
+                body: completeFormData,
+                credentials: 'include'
+            });
+            
+            if (!completeRes.ok) throw new Error("Failed to complete upload");
+            return task_id;
+        };
+
         const processVideo = async () => {
             if (!videoUrl.value && !selectedFile.value) return;
             
@@ -276,17 +338,32 @@ createApp({
                 let response;
                 let isFile = !!selectedFile.value;
                 isFileMode.value = isFile;
+                let data;
 
                 if (isFile) {
-                    console.log('[Debug] Attempting upload to:', `${apiUrl}/upload`);
-                    const formData = new FormData();
-                    formData.append('file', selectedFile.value);
-                    
-                    response = await fetch(`${apiUrl}/upload`, {
-                        method: 'POST',
-                        body: formData,
-                        credentials: 'include'
-                    });
+                    // Check file size (e.g., > 5MB)
+                    const MAX_SIZE = 5 * 1024 * 1024;
+                    if (selectedFile.value.size > MAX_SIZE) {
+                        console.log('[Debug] Large file detected, using chunked upload');
+                        const taskId = await uploadChunks(selectedFile.value);
+                        data = { task_id: taskId };
+                    } else {
+                        console.log('[Debug] Attempting upload to:', `${apiUrl}/upload`);
+                        const formData = new FormData();
+                        formData.append('file', selectedFile.value);
+                        
+                        response = await fetch(`${apiUrl}/upload`, {
+                            method: 'POST',
+                            body: formData,
+                            credentials: 'include'
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error(`API Error: ${response.statusText}`);
+                        }
+                        
+                        data = await response.json();
+                    }
                 } else {
                     // Extract Video ID
                     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
@@ -307,13 +384,13 @@ createApp({
                         body: JSON.stringify({ url: videoUrl.value }),
                         credentials: 'include'
                     });
-                }
 
-                if (!response.ok) {
-                    throw new Error(`API Error: ${response.statusText}`);
+                    if (!response.ok) {
+                        throw new Error(`API Error: ${response.statusText}`);
+                    }
+                    
+                    data = await response.json();
                 }
-                
-                const data = await response.json();
                 
                 // Start polling for status
                 if (data.task_id) {
@@ -322,12 +399,14 @@ createApp({
                 } else {
                     // Fallback for immediate response (though backend is now async)
                     videoData.value = data;
-                    if (isFile) {
-                        initFilePlayer(selectedFile.value);
-                    } else {
-                        initPlayer(data.video_id);
-                    }
-                    loading.value = false;
+                    loading.value = false; // Ensure loading is off
+                    nextTick(() => {
+                        if (isFile) {
+                            initFilePlayer(selectedFile.value);
+                        } else {
+                            initPlayer(data.video_id);
+                        }
+                    });
                 }
                 
             } catch (e) {
@@ -351,12 +430,16 @@ createApp({
                     
                     if (statusData.status === 'completed') {
                         videoData.value = statusData.result;
-                        if (isFileMode.value) {
-                            initFilePlayer(selectedFile.value);
-                        } else {
-                            initPlayer(statusData.result.video_id);
-                        }
-                        loading.value = false;
+                        loading.value = false; // Turn off loading BEFORE initPlayer
+                        
+                        // Wait for Vue to update the DOM so that #youtube-player exists
+                        nextTick(() => {
+                            if (isFileMode.value) {
+                                initFilePlayer(selectedFile.value);
+                            } else {
+                                initPlayer(statusData.result.video_id);
+                            }
+                        });
                     } else if (statusData.status === 'failed') {
                          throw new Error(statusData.error || "Processing failed");
                     } else {
