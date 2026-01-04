@@ -114,38 +114,38 @@
             </div>
 
             <!-- Subtitles Area - Scrollable Bottom -->
-            <div ref="subtitleContainer" class="flex-1 bg-white rounded-lg shadow-md p-6 overflow-y-auto relative scroll-smooth border border-gray-100">
-                <div class="max-w-3xl mx-auto flex flex-col justify-center min-h-full">
+            <div ref="subtitleContainer" class="flex-1 bg-gray-900 rounded-lg shadow-md p-6 overflow-y-auto relative scroll-smooth border border-gray-800">
+                <div class="max-w-3xl mx-auto flex flex-col justify-center min-h-full transition-all duration-500">
                     <div 
                         v-for="(segment, index) in visibleSegments" 
                         :key="segment.originalIndex" 
-                        class="mb-6 p-4 rounded-xl transition-all duration-300" 
-                        :class="currentSegmentIndex === segment.originalIndex ? 'bg-blue-50 ring-2 ring-blue-100 shadow-sm scale-[1.02]' : 'hover:bg-gray-50 opacity-60 hover:opacity-100'"
+                        class="mb-6 p-4 rounded-xl transition-all duration-500 transform" 
+                        :class="currentSegmentIndex === segment.originalIndex ? 'bg-gray-800 ring-2 ring-blue-500/50 shadow-lg scale-100 opacity-100' : 'bg-transparent opacity-40 scale-95'"
                     >
                         <!-- Japanese Line -->
-                        <div class="text-xl mb-2 leading-loose font-medium text-gray-800">
+                        <div class="text-xl mb-2 leading-loose font-medium" :class="currentSegmentIndex === segment.originalIndex ? 'text-white' : 'text-gray-400'">
                             <span 
                                 v-for="(word, wIndex) in segment.words" 
                                 :key="wIndex"
-                                class="inline-block px-1 rounded transition-all duration-150 cursor-pointer select-none"
+                                class="group inline-block px-1 rounded transition-all duration-150 cursor-pointer select-none"
                                 :class="{ 
-                                    'bg-yellow-300 text-black scale-110 shadow-sm font-bold': isWordActive(word),
-                                    'hover:bg-gray-200': !isWordActive(word)
+                                    'bg-blue-600 text-white shadow-sm font-bold': isWordActive(word),
+                                    'hover:bg-gray-700': !isWordActive(word)
                                 }"
                                 @click="seekTo(word.start)"
                             >
                                 <ruby>
                                     {{ word.text }}
-                                    <rt class="text-xs text-gray-500 font-normal select-none opacity-0 group-hover:opacity-100 transition-opacity">{{ word.reading }}</rt>
+                                    <rt class="text-xs font-normal select-none transition-opacity" :class="isWordActive(word) ? 'text-blue-200' : 'text-gray-500'">{{ word.reading }}</rt>
                                 </ruby>
                             </span>
                         </div>
                         <!-- Translation Line -->
-                        <div class="text-gray-600 text-base border-t border-gray-100 pt-2 mt-1 font-light">
+                        <div class="text-base border-t border-gray-700 pt-2 mt-1 font-light" :class="currentSegmentIndex === segment.originalIndex ? 'text-gray-300' : 'text-gray-500'">
                             {{ segment.translation }}
                         </div>
                     </div>
-                    <div v-if="visibleSegments.length === 0" class="text-center text-gray-400 py-10">
+                    <div v-if="visibleSegments.length === 0" class="text-center text-gray-500 py-10">
                         等待播放...
                     </div>
                 </div>
@@ -155,6 +155,8 @@
 
     <!-- Vue 3 -->
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Mock Data -->
+    <script src="js/mock.js"></script>
     <!-- App Logic -->
     <script src="js/app.js"></script>
     <!-- PWA Service Worker Registration -->

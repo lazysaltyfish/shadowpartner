@@ -13,6 +13,7 @@ createApp({
         const selectedFile = ref(null);
         const fileInput = ref(null);
         const isFileMode = ref(false); // New state to track if we're using file or URL
+        const contextRange = ref(2); // Number of segments to show before and after current
         const backendStatus = ref({
             online: false,
             lastCheck: null
@@ -323,6 +324,24 @@ createApp({
         const processVideo = async () => {
             if (!videoUrl.value && !selectedFile.value) return;
             
+            // Check for mock trigger
+            if (videoUrl.value === 'mock') {
+                console.log('Using Mock Data');
+                if (window.MOCK_DATA) {
+                    loading.value = true;
+                    videoData.value = window.MOCK_DATA.result;
+                    loading.value = false;
+                    nextTick(() => {
+                         // Mock video ID for youtube player, or file player logic
+                         // Since it's mock, we might not have a real player, but let's try to init player with mock ID
+                         initPlayer(window.MOCK_DATA.result.video_id);
+                    });
+                    return;
+                } else {
+                    console.error("Mock data not found");
+                }
+            }
+            
             loading.value = true;
             videoData.value = null;
             taskStatus.value = { status: 'pending', progress: 0, message: 'Initializing...' };
@@ -423,9 +442,17 @@ createApp({
                     taskStatus.value = statusData;
                     
                     if (statusData.status === 'completed') {
+                        console.log('[Debug] Task completed. Result:', statusData.result);
                         videoData.value = statusData.result;
                         loading.value = false; // Turn off loading BEFORE initPlayer
                         
+                        // Check if segments exist
+                        if (statusData.result.segments && statusData.result.segments.length > 0) {
+                            console.log(`[Debug] Loaded ${statusData.result.segments.length} segments`);
+                        } else {
+                            console.warn('[Debug] No segments found in result');
+                        }
+
                         // Wait for Vue to update the DOM so that #youtube-player exists
                         nextTick(() => {
                             if (isFileMode.value) {
@@ -451,10 +478,34 @@ createApp({
             check();
         };
 
+        const visibleSegments = computed(() => {
+            if (!videoData.value || !videoData.value.segments) return [];
+            
+            const segments = videoData.value.segments;
+            const current = currentSegmentIndex.value;
+            const range = contextRange.value;
+            
+            // Determine the window of segments to show
+            // If current is -1 (not started), show the beginning
+            const centerIndex = current === -1 ? 0 : current;
+            
+            const start = Math.max(0, centerIndex - range);
+            const end = Math.min(segments.length, centerIndex + range + 1);
+            
+            // console.log('[Debug] Computing visibleSegments', { centerIndex, start, end });
+
+            return segments.slice(start, end).map((seg, index) => ({
+                ...seg,
+                originalIndex: start + index
+            }));
+        });
+
         return {
             videoUrl,
             loading,
             videoData,
+            visibleSegments, // Export this so template can use it
+            contextRange,    // Export for potential UI control
             processVideo,
             isWordActive,
             seekTo,
