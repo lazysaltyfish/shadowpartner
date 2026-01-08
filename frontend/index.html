@@ -150,19 +150,19 @@
                     >
                         <!-- Japanese Line -->
                         <div class="text-xl mb-2 leading-loose font-medium" :class="currentSegmentIndex === segment.originalIndex ? 'text-white' : 'text-gray-400'">
-                            <span 
-                                v-for="(word, wIndex) in segment.words" 
+                            <span
+                                v-for="(word, wIndex) in segment.words"
                                 :key="wIndex"
                                 class="group inline-block px-1 rounded transition-all duration-150 cursor-pointer select-none"
-                                :class="{ 
-                                    'bg-blue-600 text-white shadow-sm font-bold': isWordActive(word),
-                                    'hover:bg-gray-700': !isWordActive(word)
+                                :class="{
+                                    'bg-blue-600 text-white shadow-sm font-bold': isWordActive(word, segment),
+                                    'hover:bg-gray-700': !isWordActive(word, segment)
                                 }"
-                                @click="seekTo(word.start)"
+                                @click="seekTo(hasWordTimestamps ? word.start : segment.start)"
                             >
                                 <ruby>
                                     {{ word.text }}
-                                    <rt class="text-xs font-normal select-none transition-opacity" :class="isWordActive(word) ? 'text-blue-200' : 'text-gray-500'">{{ word.reading }}</rt>
+                                    <rt class="text-xs font-normal select-none transition-opacity" :class="isWordActive(word, segment) ? 'text-blue-200' : 'text-gray-500'">{{ word.reading }}</rt>
                                 </ruby>
                             </span>
                         </div>

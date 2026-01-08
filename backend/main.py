@@ -129,6 +129,7 @@ class VideoResponse(BaseModel):
     title: str
     segments: List[Segment]
     metrics: Optional[ProcessingMetrics] = None
+    has_word_timestamps: bool = True  # False when using user-provided subtitles (no word-level timing)
 
 class AsyncProcessResponse(BaseModel):
     task_id: str
@@ -185,6 +186,7 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
     transcribe_time = 0.0
     analysis_time = 0.0
     translation_time = 0.0
+    has_word_timestamps = True  # Track if we have precise word-level timestamps
     
     try:
         # 2. Transcribe or load user-provided subtitle
@@ -197,6 +199,7 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
             result = await run_cpu_bound(transcriber.load_subtitle, subtitle_path)
             whisper_segments = result['segments']
             transcribe_time = time.time() - t0
+            has_word_timestamps = False  # User-provided subtitles don't have word-level timestamps
             print(f"Loaded {len(whisper_segments)} segments from user subtitle.")
         else:
             # No subtitle provided - use AI transcription
@@ -233,7 +236,13 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
                 texts.append(text)
                 whisper_words = seg.get('words', [])
                 mecab_tokens = analyzer.analyze(text)
-                aligned_tokens = aligner.align(whisper_words, mecab_tokens)
+                # Pass segment timestamps for cases where word-level timestamps are not available
+                aligned_tokens = aligner.align(
+                    whisper_words,
+                    mecab_tokens,
+                    segment_start=seg.get('start'),
+                    segment_end=seg.get('end')
+                )
                 
                 words_model = []
                 for t in aligned_tokens:
@@ -296,7 +305,8 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
             video_id=video_id,
             title=title,
             segments=final_segments,
-            metrics=metrics
+            metrics=metrics,
+            has_word_timestamps=has_word_timestamps
         )
         
         update_task(task_id, TaskStatus.COMPLETED, 100, "Completed", result=final_response)

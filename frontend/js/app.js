@@ -209,18 +209,16 @@ createApp({
             const segments = videoData.value.segments;
             let foundSegment = -1;
 
-            // Simple search (can be optimized with binary search if needed)
-            for (let i = 0; i < segments.length; i++) {
+            // Search backwards to find the last matching segment, which is usually the correct one
+            for (let i = segments.length - 1; i >= 0; i--) {
                 const seg = segments[i];
-                if (!seg.words.length) continue;
                 
-                const start = seg.words[0].start;
-                const end = seg.words[seg.words.length - 1].end;
+                const start = seg.start;
+                const end = seg.end;
                 
-                // Allow a small buffer for segment selection
-                if (currentTime.value >= start - 0.5 && currentTime.value <= end + 0.5) {
+                if (currentTime.value >= start) {
                     foundSegment = i;
-                    break;
+                    break; 
                 }
             }
 
@@ -233,7 +231,17 @@ createApp({
             // Deprecated: automatic view limiting handles visibility
         };
 
-        const isWordActive = (word) => {
+        // Check if we have precise word-level timestamps
+        const hasWordTimestamps = computed(() => {
+            return videoData.value?.has_word_timestamps !== false;
+        });
+
+        const isWordActive = (word, segment) => {
+            // If we don't have word-level timestamps, highlight all words in the current segment
+            if (!hasWordTimestamps.value && segment) {
+                return currentTime.value >= segment.start && currentTime.value < segment.end;
+            }
+            // Otherwise, use precise word-level timing
             return currentTime.value >= word.start && currentTime.value < word.end;
         };
 
@@ -560,6 +568,7 @@ createApp({
             contextRange,    // Export for potential UI control
             processVideo,
             isWordActive,
+            hasWordTimestamps, // Export to control highlight mode in template
             seekTo,
             currentSegmentIndex,
             segmentRefs,

@@ -1,21 +1,39 @@
 import difflib
 
 class Aligner:
-    def align(self, whisper_words, mecab_tokens):
+    def align(self, whisper_words, mecab_tokens, segment_start: float = None, segment_end: float = None):
         """
         Aligns timestamps from whisper words to mecab tokens.
         whisper_words: list of {'word': str, 'start': float, 'end': float}
         mecab_tokens: list of {'text': str, 'reading': str}
+        segment_start: Optional segment start time (used when whisper_words is empty)
+        segment_end: Optional segment end time (used when whisper_words is empty)
         Returns: mecab_tokens with 'start' and 'end' keys added.
         """
         if not mecab_tokens:
             return []
         if not whisper_words:
-            # If no whisper words, we can't align timestamps. 
-            # Just return tokens with 0 timestamps or handle gracefully.
-            for t in mecab_tokens:
-                t['start'] = 0.0
-                t['end'] = 0.0
+            # If no whisper words but we have segment timestamps, distribute time evenly across tokens
+            if segment_start is not None and segment_end is not None:
+                total_chars = sum(len(t['text']) for t in mecab_tokens)
+                if total_chars == 0:
+                    for t in mecab_tokens:
+                        t['start'] = segment_start
+                        t['end'] = segment_end
+                else:
+                    duration = segment_end - segment_start
+                    current_time = segment_start
+                    for t in mecab_tokens:
+                        char_count = len(t['text'])
+                        token_duration = (char_count / total_chars) * duration
+                        t['start'] = current_time
+                        t['end'] = current_time + token_duration
+                        current_time = t['end']
+            else:
+                # No timestamps available at all
+                for t in mecab_tokens:
+                    t['start'] = 0.0
+                    t['end'] = 0.0
             return mecab_tokens
 
         # 1. Flatten Whisper words into a char-level map
