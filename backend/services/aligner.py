@@ -1,9 +1,158 @@
 import difflib
 
 class Aligner:
+    def calibrate(self, reference_segments: list, generated_segments: list) -> list:
+        """
+        Hybrid Timestamp Calibration:
+        Aligns generated AI timestamps to reference subtitle text.
+        
+        Args:
+            reference_segments: List of dicts {'text': str, 'start': float, 'end': float} (User/SRT)
+            generated_segments: List of dicts {'text': str, 'words': List[...]} (Whisper AI)
+            
+        Returns:
+            List of {'word': str, 'start': float, 'end': float} representing character-level timestamps
+            for the reference text, suitable for passing to align() as whisper_words.
+        """
+        # 1. Flatten Generated Segments -> Characters with timestamps
+        gen_chars = []
+        for seg in generated_segments:
+            words = seg.get('words', [])
+            # Fallback if no words (shouldn't happen with word_timestamps=True, but safety first)
+            if not words:
+                # Distribute segment duration over characters
+                text = seg.get('text', '')
+                start = seg.get('start', 0.0)
+                end = seg.get('end', 0.0)
+                if not text: continue
+                duration = end - start
+                char_dur = duration / len(text)
+                for i, char in enumerate(text):
+                    gen_chars.append({
+                        'char': char,
+                        'start': start + i * char_dur,
+                        'end': start + (i + 1) * char_dur
+                    })
+            else:
+                for word in words:
+                    w_text = word['word']
+                    w_start = word['start']
+                    w_end = word['end']
+                    w_dur = w_end - w_start
+                    if not w_text: continue
+                    c_dur = w_dur / len(w_text)
+                    for i, char in enumerate(w_text):
+                        gen_chars.append({
+                            'char': char,
+                            'start': w_start + i * c_dur,
+                            'end': w_start + (i + 1) * c_dur
+                        })
+
+        # 2. Flatten Reference Segments -> Characters with segment constraints
+        ref_chars = []
+        for seg in reference_segments:
+            text = seg.get('text', '')
+            seg_start = seg.get('start', 0.0)
+            seg_end = seg.get('end', 0.0)
+            
+            # Clean text slightly to match better (optional, but spaces often mess up diffs if inconsistent)
+            # But we want to preserve original text for output.
+            # We'll strip for matching but keep original structure.
+            
+            for char in text:
+                ref_chars.append({
+                    'char': char,
+                    'seg_start': seg_start,
+                    'seg_end': seg_end,
+                    'start': None,
+                    'end': None
+                })
+
+        # 3. Align Character Streams
+        gen_str = "".join(c['char'] for c in gen_chars)
+        ref_str = "".join(c['char'] for c in ref_chars)
+        
+        matcher = difflib.SequenceMatcher(None, ref_str, gen_str)
+        
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == 'equal':
+                for k in range(i2 - i1):
+                    r_idx = i1 + k
+                    g_idx = j1 + k
+                    # Transfer timestamps
+                    ref_chars[r_idx]['start'] = gen_chars[g_idx]['start']
+                    ref_chars[r_idx]['end'] = gen_chars[g_idx]['end']
+        
+        # 4. Interpolation and Constraint Enforcement
+        # We process each reference segment independently to ensure we don't bleed across segment boundaries?
+        # Actually, iterating linearly is fine, as long as we clamp to seg_start/seg_end.
+        
+        # Fill None values
+        last_valid_end = 0.0
+        # Forward pass to fill starts/ends
+        for i, rc in enumerate(ref_chars):
+            if rc['start'] is None:
+                # Look ahead for next valid start
+                next_start = None
+                steps = 0
+                for j in range(i + 1, len(ref_chars)):
+                    if ref_chars[j]['start'] is not None:
+                        next_start = ref_chars[j]['start']
+                        steps = j - i
+                        break
+                
+                if next_start is not None:
+                    # Interpolate
+                    # If last_valid_end is far behind (e.g. previous segment), this might stretch.
+                    # But we will clamp later.
+                    prev_time = last_valid_end
+                    if prev_time < rc['seg_start']: # Ensure we don't start before segment
+                         prev_time = rc['seg_start']
+                    
+                    gap = next_start - prev_time
+                    step_size = gap / (steps + 1)
+                    rc['start'] = prev_time + step_size
+                    rc['end'] = rc['start'] + step_size
+                else:
+                    # No future timestamp found, use segment end or fallback
+                    rc['start'] = max(last_valid_end, rc['seg_start'])
+                    rc['end'] = rc['start'] + 0.1 # Arbitrary small duration
+            
+            # Clamp to Segment Boundaries
+            if rc['start'] < rc['seg_start']:
+                rc['start'] = rc['seg_start']
+            if rc['start'] > rc['seg_end']:
+                rc['start'] = rc['seg_end']
+                
+            if rc['end'] > rc['seg_end']:
+                rc['end'] = rc['seg_end']
+            if rc['end'] < rc['seg_start']:
+                rc['end'] = rc['seg_start']
+            
+            # Sanity: start <= end
+            if rc['start'] > rc['end']:
+                # If we clamped both to seg_end, this might happen if original start > end (unlikely)
+                # or if start was clamped to seg_end and end was also clamped to seg_end.
+                # Just sync them.
+                rc['end'] = rc['start']
+                
+            last_valid_end = rc['end']
+
+        # 5. Convert back to "Words" format for align()
+        # Since we are essentially passing characters, each "word" is a character.
+        calibrated_words = []
+        for rc in ref_chars:
+            calibrated_words.append({
+                'word': rc['char'],
+                'start': rc['start'],
+                'end': rc['end']
+            })
+            
+        return calibrated_words
+
     def align(self, whisper_words, mecab_tokens, segment_start: float = None, segment_end: float = None):
         """
-        Aligns timestamps from whisper words to mecab tokens.
+        Aligns timestamps from whisper words (or calibrated characters) to mecab tokens.
         whisper_words: list of {'word': str, 'start': float, 'end': float}
         mecab_tokens: list of {'text': str, 'reading': str}
         segment_start: Optional segment start time (used when whisper_words is empty)

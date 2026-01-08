@@ -157,6 +157,7 @@ createApp({
                  const isVideo = file.type.startsWith('video/');
                  const mediaEl = document.createElement(isVideo ? 'video' : 'audio');
                  mediaEl.src = URL.createObjectURL(file);
+                 mediaEl.volume = 0.5;
                  mediaEl.controls = true;
                  mediaEl.className = "max-w-full max-h-full";
                  mediaEl.style.width = isVideo ? "100%" : "80%"; // Make audio player smaller width
@@ -196,6 +197,7 @@ createApp({
         };
 
         const onPlayerReady = (event) => {
+            event.target.setVolume(50);
             startPolling();
         };
 

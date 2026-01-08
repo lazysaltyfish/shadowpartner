@@ -1,4 +1,5 @@
 import os
+import asyncio
 from google import genai
 from typing import List
 import time
@@ -43,11 +44,60 @@ class Translator:
             return response.text.strip()
         except Exception as e:
             logger.error(f"Gemini translation error: {e}")
-            return "[翻译失败]"
+            return f"[翻译失败: {str(e)}]"
             
-    def translate_batch(self, texts: List[str], target_lang: str = "Chinese") -> List[str]:
+    def _process_chunk(self, chunk: List[str], chunk_index: int, target_lang: str) -> List[str]:
         """
-        Translates a list of texts in one go to save time and quota.
+        Process a single chunk of text for translation.
+        """
+        logger.info(f"Processing chunk {chunk_index + 1} ({len(chunk)} items)...")
+        
+        # Format:
+        # 1. <text>
+        # 2. <text>
+        joined_text = "\n".join([f"{idx+1}. {t}" for idx, t in enumerate(chunk)])
+        
+        prompt = (
+            f"Translate the following Japanese sentences to {target_lang} (Simplified Chinese). "
+            f"Output strictly as a numbered list corresponding to the input numbers (e.g., '1. translation'). "
+            f"Do not merge sentences. Maintain the original tone.\n\n{joined_text}"
+        )
+        
+        chunk_results = []
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_id,
+                contents=prompt
+            )
+            response_text = response.text.strip()
+            
+            # Parse logic
+            lines = response_text.split('\n')
+            chunk_map = {}
+            for line in lines:
+                line = line.strip()
+                if not line: continue
+                # Look for "1. " pattern
+                parts = line.split('.', 1)
+                if len(parts) >= 2 and parts[0].strip().isdigit():
+                    idx = int(parts[0].strip()) - 1
+                    trans = parts[1].strip()
+                    chunk_map[idx] = trans
+            
+            # Reconstruct chunk results
+            for j in range(len(chunk)):
+                chunk_results.append(chunk_map.get(j, "[翻译缺失]"))
+                
+        except Exception as e:
+            logger.error(f"Gemini batch translation error in chunk {chunk_index + 1}: {e}")
+            # Fallback: append error messages for this chunk
+            chunk_results.extend([f"[翻译错误: {str(e)}]"] * len(chunk))
+            
+        return chunk_results
+
+    async def translate_batch(self, texts: List[str], target_lang: str = "Chinese") -> List[str]:
+        """
+        Translates a list of texts concurrently to save time.
         """
         if not self.available:
             logger.warning("Gemini API Key missing. Skipping batch translation.")
@@ -56,57 +106,24 @@ class Translator:
         if not texts:
             return []
             
-        logger.info(f"Starting batch translation. Total items: {len(texts)}")
-            
-        # Process in chunks to avoid token limits or confusion
-        all_results = []
+        logger.info(f"Starting concurrent batch translation. Total items: {len(texts)}")
+        
+        loop = asyncio.get_running_loop()
+        tasks = []
         
         for i in range(0, len(texts), self.chunk_size):
             chunk = texts[i:i + self.chunk_size]
-            logger.info(f"Processing chunk {i//self.chunk_size + 1} ({len(chunk)} items)...")
+            chunk_index = i // self.chunk_size
+            # Run the synchronous _process_chunk in a thread pool
+            tasks.append(loop.run_in_executor(None, self._process_chunk, chunk, chunk_index, target_lang))
             
-            # Format:
-            # 1. <text>
-            # 2. <text>
-            joined_text = "\n".join([f"{idx+1}. {t}" for idx, t in enumerate(chunk)])
-            
-            prompt = (
-                f"Translate the following Japanese sentences to {target_lang} (Simplified Chinese). "
-                f"Output strictly as a numbered list corresponding to the input numbers (e.g., '1. translation'). "
-                f"Do not merge sentences. Maintain the original tone.\n\n{joined_text}"
-            )
-            
-            try:
-                # Add a small delay if processing multiple chunks to be nice to the API
-                if i > 0: time.sleep(1)
-                
-                response = self.client.models.generate_content(
-                    model=self.model_id,
-                    contents=prompt
-                )
-                response_text = response.text.strip()
-                
-                # Parse logic
-                lines = response_text.split('\n')
-                chunk_map = {}
-                for line in lines:
-                    line = line.strip()
-                    if not line: continue
-                    # Look for "1. " pattern
-                    parts = line.split('.', 1)
-                    if len(parts) >= 2 and parts[0].strip().isdigit():
-                        idx = int(parts[0].strip()) - 1
-                        trans = parts[1].strip()
-                        chunk_map[idx] = trans
-                
-                # Reconstruct chunk results
-                for j in range(len(chunk)):
-                    all_results.append(chunk_map.get(j, "[翻译缺失]"))
-                    
-            except Exception as e:
-                logger.error(f"Gemini batch translation error in chunk {i//self.chunk_size + 1}: {e}")
-                # Fallback: append error messages for this chunk
-                all_results.extend(["[翻译错误]"] * len(chunk))
+        # Wait for all chunks to complete
+        chunk_results_list = await asyncio.gather(*tasks)
         
-        logger.info("Batch translation completed.")        
+        # Flatten results
+        all_results = []
+        for chunk_res in chunk_results_list:
+            all_results.extend(chunk_res)
+            
+        logger.info("Batch translation completed.")
         return all_results

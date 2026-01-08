@@ -24,7 +24,7 @@ def parse_srt_time(time_str: str) -> float:
 
 def parse_srt(content: str) -> list:
     """
-    Parse SRT subtitle content and return segments in Whisper-like format.
+    Parse SRT subtitle content and return segments in Standard Segment format.
     
     Returns:
         list: List of segment dicts with 'text', 'start', 'end', and 'words' keys.
@@ -69,9 +69,9 @@ def parse_srt(content: str) -> list:
         if not text:
             continue
         
-        # Create segment in Whisper-like format
+        # Create segment in Standard Segment format
         # Note: We don't have word-level timestamps from SRT, so words list will be empty
-        # The aligner will handle this case
+        # The aligner will handle this case via calibration
         segment = {
             'text': text,
             'start': start_time,
@@ -138,7 +138,7 @@ class AudioTranscriber:
 
     def load_subtitle(self, subtitle_path: str = None, subtitle_content: str = None) -> dict:
         """
-        Load subtitle from file or content string and return in Whisper-like format.
+        Load subtitle from file or content string and return in Standard Segment format.
         
         Args:
             subtitle_path (str): Path to the subtitle file (SRT format).

@@ -189,36 +189,56 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
     has_word_timestamps = True  # Track if we have precise word-level timestamps
     
     try:
-        # 2. Transcribe or load user-provided subtitle
+        # 2. Transcribe (Always run AI for timing reference)
+        update_task(task_id, TaskStatus.PROCESSING, 10, "Transcribing audio (Generating Timing Reference)...")
+        print("Transcribing audio for timing reference...")
+        t0 = time.time()
+        # Run synchronous transcribe in a thread
+        gen_result = await run_cpu_bound(transcriber.transcribe, file_path, language="ja")
+        generated_segments = gen_result['segments']
+        transcribe_time = time.time() - t0
+        
+        reference_segments = []
+
+        # 3. Load & Calibrate User Subtitle (if provided)
         if subtitle_path and os.path.exists(subtitle_path):
-            # User provided subtitle - skip AI transcription
-            update_task(task_id, TaskStatus.PROCESSING, 10, "Loading user-provided subtitle...")
+            update_task(task_id, TaskStatus.PROCESSING, 30, "Loading and Calibrating User Subtitle...")
             print("Loading user-provided subtitle file...")
-            t0 = time.time()
-            # Run synchronous load_subtitle in a thread
-            result = await run_cpu_bound(transcriber.load_subtitle, subtitle_path)
-            whisper_segments = result['segments']
-            transcribe_time = time.time() - t0
-            has_word_timestamps = False  # User-provided subtitles don't have word-level timestamps
-            print(f"Loaded {len(whisper_segments)} segments from user subtitle.")
+            
+            # Load Reference
+            ref_result = await run_cpu_bound(transcriber.load_subtitle, subtitle_path)
+            reference_segments = ref_result['segments']
+            print(f"Loaded {len(reference_segments)} segments from user subtitle.")
+            
+            # Calibrate
+            # Run calibration in thread as it might be heavy for large files
+            print("Calibrating timestamps...")
+            calibrated_chars = await run_cpu_bound(aligner.calibrate, reference_segments, generated_segments)
+            
+            # Distribute calibrated characters back to reference segments
+            # This prepares 'words' for the analyzer/aligner later
+            curr_idx = 0
+            for seg in reference_segments:
+                seg_len = len(seg['text'])
+                # Slice the flat list of characters belonging to this segment
+                seg['words'] = calibrated_chars[curr_idx : curr_idx + seg_len]
+                curr_idx += seg_len
+                
+            has_word_timestamps = True # We now have calibrated word timestamps!
+            
         else:
-            # No subtitle provided - use AI transcription
-            update_task(task_id, TaskStatus.PROCESSING, 10, "Transcribing audio (this may take a while)...")
-            print("Transcribing audio...")
-            t0 = time.time()
-            # Run synchronous transcribe in a thread
-            result = await run_cpu_bound(transcriber.transcribe, file_path, language="ja")
-            whisper_segments = result['segments']
-            transcribe_time = time.time() - t0
+            # No subtitle provided - use AI transcription as reference
+            reference_segments = generated_segments
+            has_word_timestamps = True
         
         update_task(task_id, TaskStatus.PROCESSING, 40, "Analyzing Japanese text...")
         
-        # 3. Process Segments (Analyze & Align)
-        print(f"Analyzing {len(whisper_segments)} segments...")
+        # 4. Process Segments (Analyze & Align)
+        print(f"Analyzing {len(reference_segments)} segments...")
         final_segments = []
         raw_texts = []
         
-        total_segments = len(whisper_segments)
+        total_segments = len(reference_segments)
         
         # We can also offload the analysis loop if it's heavy, but let's see. 
         # For now, let's keep it in the loop but yield control occasionally if needed.
@@ -263,7 +283,7 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
 
         # Run analysis in thread
         t0 = time.time()
-        final_segments, raw_texts = await run_cpu_bound(analyze_segments, whisper_segments)
+        final_segments, raw_texts = await run_cpu_bound(analyze_segments, reference_segments)
         analysis_time = time.time() - t0
 
         update_task(task_id, TaskStatus.PROCESSING, 70, "Translating to Chinese...")
@@ -271,10 +291,8 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
         # 4. Translate
         print("Translating segments...")
         t0 = time.time()
-        # Translation involves network I/O but the client might be sync or async. 
-        # Our new translator uses google-genai which might be sync or async depending on usage.
-        # We implemented it as synchronous calls. So offload it.
-        translations = await run_cpu_bound(translator.translate_batch, raw_texts)
+        # Translation involves network I/O. We updated translator to be async and concurrent.
+        translations = await translator.translate_batch(raw_texts)
         translation_time = time.time() - t0
         
         # Map translations back (handle potential length mismatch gracefully)
