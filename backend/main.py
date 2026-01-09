@@ -174,7 +174,7 @@ async def run_cpu_bound(func, *args, **kwargs):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
-def check_subtitle_similarity(generated_segments: List[Dict], reference_segments: List[Dict], threshold: float = 0.4) -> List[str]:
+def check_subtitle_similarity(generated_segments: List[Dict], reference_segments: List[Dict], threshold: float = 0.1) -> List[str]:
     """
     Check similarity between generated segments and reference segments.
     Returns a list of warnings if similarity is low.
