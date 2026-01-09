@@ -8,6 +8,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Custom CSS -->
     <link rel="stylesheet" href="css/style.css">
+    <!-- ArtPlayer -->
+    <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
     <!-- PWA Manifest -->
     <link rel="manifest" href="manifest.json">
 </head>
@@ -135,9 +137,9 @@
         <!-- Main Content (Player & Subtitles) -->
         <div v-if="videoData" class="flex-1 flex flex-col overflow-hidden gap-4">
 
-            <!-- Video Player Area - Fixed Height Top -->
-            <div class="h-[40vh] shrink-0 bg-black rounded-lg overflow-hidden flex items-center justify-center relative shadow-lg">
-                <div id="youtube-player" class="w-full h-full"></div>
+            <!-- Video Player Area - Auto Height -->
+            <div class="shrink-0 bg-black rounded-lg overflow-hidden relative shadow-lg">
+                <div id="youtube-player" class="w-full"></div>
             </div>
 
             <!-- Subtitles Area - Scrollable Bottom -->

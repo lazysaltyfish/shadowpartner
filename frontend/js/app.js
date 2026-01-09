@@ -140,46 +140,85 @@ createApp({
             });
         };
 
-        // File Audio/Video Player
+        // File Audio/Video Player using ArtPlayer
         const initFilePlayer = (file) => {
-            // Destroy YouTube player if it exists
-             if (player.value && typeof player.value.destroy === 'function') {
-                 player.value.destroy();
-                 player.value = null;
-             }
-             
-             // Clear container
-             const container = document.getElementById('youtube-player');
-             if (container) {
-                 container.innerHTML = '';
-                 container.className = "w-full h-full flex items-center justify-center bg-gray-900";
+            // Destroy existing player if it exists
+            if (player.value) {
+                if (typeof player.value.destroy === 'function') {
+                    player.value.destroy();
+                }
+                player.value = null;
+            }
 
-                 // Create Video or Audio element
-                 const isVideo = file.type.startsWith('video/');
-                 const mediaEl = document.createElement(isVideo ? 'video' : 'audio');
-                 mediaEl.src = URL.createObjectURL(file);
-                 mediaEl.volume = 0.5;
-                 mediaEl.controls = true;
-                 mediaEl.className = "max-w-full max-h-full";
-                 mediaEl.style.width = isVideo ? "100%" : "80%"; // Make audio player smaller width
-                 
-                 container.appendChild(mediaEl);
-                 
-                 // Wrap into a consistent interface for our app logic
-                 player.value = {
-                     getCurrentTime: () => mediaEl.currentTime,
-                     seekTo: (time, allowSeekAhead) => { mediaEl.currentTime = time; },
-                     playVideo: () => mediaEl.play(),
-                     pauseVideo: () => mediaEl.pause(),
-                     // Custom property to identify as non-YT
-                     isNative: true
-                 };
+            // Clear container
+            const container = document.getElementById('youtube-player');
+            if (!container) {
+                console.error("Player container not found");
+                return;
+            }
 
-                 // Start polling loop manually since no 'onReady' event like YT
-                 startPolling();
-             } else {
-                 console.error("Player container not found");
-             }
+            container.innerHTML = '';
+            container.className = "w-full";
+
+            // Create a wrapper div for ArtPlayer
+            const artContainer = document.createElement('div');
+            artContainer.className = 'artplayer-app';
+            artContainer.style.width = '100%';
+            // Height will be auto-calculated by ArtPlayer based on video aspect ratio
+            container.appendChild(artContainer);
+
+            // Create object URL for the file
+            const fileUrl = URL.createObjectURL(file);
+
+            // Initialize ArtPlayer
+            const art = new Artplayer({
+                container: artContainer,
+                url: fileUrl,
+                volume: 0.5,
+                setting: true,
+                playbackRate: true,
+                aspectRatio: true,
+                fullscreen: true,
+                fullscreenWeb: true,
+                pip: true,
+                autoSize: false,
+                autoMini: true,
+                theme: '#3B82F6',
+                lang: 'zh-cn',
+            });
+
+            // Auto-resize container based on video aspect ratio
+            art.on('video:loadedmetadata', () => {
+                const video = art.video;
+                const aspectRatio = video.videoWidth / video.videoHeight;
+                const containerWidth = artContainer.clientWidth;
+                const newHeight = containerWidth / aspectRatio;
+                artContainer.style.height = `${newHeight}px`;
+                console.log('[ArtPlayer] Resized to:', containerWidth, 'x', newHeight, 'aspect ratio:', aspectRatio);
+            });
+
+            // Listen for time updates
+            art.on('video:timeupdate', () => {
+                const time = art.currentTime;
+                if (Math.abs(time - currentTime.value) > 0.1) {
+                    currentTime.value = time;
+                    updateActiveWords();
+                }
+            });
+
+            // Wrap ArtPlayer into a consistent interface for our app logic
+            player.value = {
+                getCurrentTime: () => art.currentTime,
+                seekTo: (time, allowSeekAhead) => { art.seek = time; },
+                playVideo: () => art.play(),
+                pauseVideo: () => art.pause(),
+                destroy: () => art.destroy(),
+                // Reference to the actual ArtPlayer instance
+                artInstance: art,
+                isNative: true
+            };
+
+            console.log('[ArtPlayer] Initialized with volume:', art.volume);
         };
 
         const startPolling = () => {
@@ -507,15 +546,16 @@ createApp({
                             console.table(statusData.result.metrics);
                         }
 
-                        videoData.value = statusData.result;
-                        
+                        // Set warnings BEFORE videoData to ensure modal shows correctly
                         console.log('[Debug] Processing warnings:', statusData.result.warnings);
-                        if (statusData.result.warnings && statusData.result.warnings.length > 0) {
+                        if (statusData.result.warnings && Array.isArray(statusData.result.warnings) && statusData.result.warnings.length > 0) {
                             warnings.value = statusData.result.warnings;
                             console.log('[Debug] Warnings set to UI:', warnings.value);
                         } else {
                             warnings.value = [];
                         }
+
+                        videoData.value = statusData.result;
 
                         loading.value = false; // Turn off loading BEFORE initPlayer
                         
