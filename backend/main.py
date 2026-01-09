@@ -146,6 +146,7 @@ try:
     whisper_device = os.getenv("WHISPER_DEVICE", None) # Default to None (Auto)
     whisper_fp16 = os.getenv("WHISPER_FP16", "False").lower() == "true"
     whisper_model_size = os.getenv("WHISPER_MODEL_SIZE", "base")
+    subtitle_similarity_threshold = float(os.getenv("SUBTITLE_SIMILARITY_THRESHOLD", "0.1"))
     
     downloader = VideoDownloader()
     transcriber = AudioTranscriber(model_size=whisper_model_size, device=whisper_device, fp16=whisper_fp16)
@@ -279,7 +280,7 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
             print("Checking subtitle similarity...")
             # Create a temporary segment list for similarity check
             temp_ref_segments = [{'text': merged_text, 'start': 0, 'end': 0}]
-            warnings = check_subtitle_similarity(generated_segments, temp_ref_segments, threshold=0.4)
+            warnings = check_subtitle_similarity(generated_segments, temp_ref_segments, threshold=subtitle_similarity_threshold)
             if warnings:
                 print(f"[Subtitle Check] Generated warnings: {warnings}")
             else:
