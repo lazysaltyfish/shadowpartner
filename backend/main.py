@@ -264,40 +264,44 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
         if subtitle_path and os.path.exists(subtitle_path):
             update_task(task_id, TaskStatus.PROCESSING, 30, "Loading and Calibrating User Subtitle...")
             print("Loading user-provided subtitle file...")
-            
+
             # Load Reference
             ref_result = await run_cpu_bound(transcriber.load_subtitle, subtitle_path)
-            reference_segments = ref_result['segments']
-            print(f"Loaded {len(reference_segments)} segments from user subtitle.")
-            
-            # Linearize (Remove scrolling duplicates)
-            print("Linearizing subtitles...")
-            reference_segments = subtitle_linearizer.linearize(reference_segments)
-            print(f"Segments after linearization: {len(reference_segments)}")
+            raw_reference_segments = ref_result['segments']
+            print(f"Loaded {len(raw_reference_segments)} segments from user subtitle.")
 
-            # Check Similarity
+            # Deduplicate scrolling subtitles with metadata tracking
+            print("Deduplicating scrolling subtitles...")
+            merged_text, char_metadata = subtitle_linearizer.deduplicate_with_metadata(raw_reference_segments)
+            print(f"Merged text length: {len(merged_text)} chars")
+
+            # Check Similarity using merged text vs AI text
             print("Checking subtitle similarity...")
-            warnings = check_subtitle_similarity(generated_segments, reference_segments, threshold=0.4)
+            # Create a temporary segment list for similarity check
+            temp_ref_segments = [{'text': merged_text, 'start': 0, 'end': 0}]
+            warnings = check_subtitle_similarity(generated_segments, temp_ref_segments, threshold=0.4)
             if warnings:
                 print(f"[Subtitle Check] Generated warnings: {warnings}")
             else:
                 print(f"[Subtitle Check] Passed. No warnings generated.")
 
-            # Calibrate
-            # Run calibration in thread as it might be heavy for large files
+            # Calibrate timestamps using new method
             print("Calibrating timestamps...")
-            calibrated_chars = await run_cpu_bound(aligner.calibrate, reference_segments, generated_segments)
-            
-            # Distribute calibrated characters back to reference segments
-            # This prepares 'words' for the analyzer/aligner later
-            curr_idx = 0
-            for seg in reference_segments:
-                seg_len = len(seg['text'])
-                # Slice the flat list of characters belonging to this segment
-                seg['words'] = calibrated_chars[curr_idx : curr_idx + seg_len]
-                curr_idx += seg_len
-                
-            has_word_timestamps = True # We now have calibrated word timestamps!
+            _, char_timestamps = await run_cpu_bound(
+                aligner.calibrate_from_merged,
+                merged_text,
+                char_metadata,
+                generated_segments
+            )
+
+            # Rebuild segments with calibrated timestamps
+            print("Rebuilding segments...")
+            reference_segments = aligner.rebuild_segments_with_timestamps(
+                merged_text, char_metadata, char_timestamps
+            )
+            print(f"Rebuilt {len(reference_segments)} segments with timestamps")
+
+            has_word_timestamps = True
             
         else:
             # No subtitle provided - use AI transcription as reference

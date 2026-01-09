@@ -117,29 +117,29 @@ class TestSubtitleLinearizer(unittest.TestCase):
         self.assertEqual(result[2]['text'], "of life")
 
     def test_overlap_helper(self):
-        """Test the _find_longest_overlap helper method directly."""
+        """Test the _find_overlap_at_end helper method directly."""
         s1 = "Hello world"
         s2 = "world is great"
         # Overlap: "world" (5 chars)
-        overlap = self.linearizer._find_longest_overlap(s1, s2)
+        overlap = self.linearizer._find_overlap_at_end(s1, s2)
         self.assertEqual(overlap, 5)
 
         s1 = "abcde"
         s2 = "cdefg"
         # Overlap: "cde" (3 chars)
-        overlap = self.linearizer._find_longest_overlap(s1, s2)
+        overlap = self.linearizer._find_overlap_at_end(s1, s2)
         self.assertEqual(overlap, 3)
-        
+
         s1 = "abc"
         s2 = "xyz"
-        overlap = self.linearizer._find_longest_overlap(s1, s2)
+        overlap = self.linearizer._find_overlap_at_end(s1, s2)
         self.assertEqual(overlap, 0)
-        
+
         # Test case where suffix is shorter than prefix
         s1 = "end"
         s2 = "ending"
         # overlap "end" (3)
-        overlap = self.linearizer._find_longest_overlap(s1, s2)
+        overlap = self.linearizer._find_overlap_at_end(s1, s2)
         self.assertEqual(overlap, 3)
 
     def test_real_world_jitter(self):
@@ -162,6 +162,52 @@ class TestSubtitleLinearizer(unittest.TestCase):
         # New " It's me" -> "It's me"
         
         self.assertEqual(result[1]['text'], "It's me")
+
+    def test_deduplicate_with_metadata(self):
+        """Test the new deduplicate_with_metadata method."""
+        subtitles = [
+            {"start": 0.0, "end": 1.0, "text": "今日は"},
+            {"start": 1.0, "end": 2.0, "text": "今日は天気が"},
+            {"start": 2.0, "end": 3.0, "text": "天気がいい"},
+            {"start": 3.0, "end": 4.0, "text": "いいですね"}
+        ]
+
+        merged_text, char_metadata = self.linearizer.deduplicate_with_metadata(subtitles)
+
+        # Expected merged text: "今日は天気がいいですね"
+        self.assertEqual(merged_text, "今日は天気がいいですね")
+        self.assertEqual(len(char_metadata), len(merged_text))
+
+        # Check metadata tracking
+        # "今日は" from segment 0
+        self.assertEqual(char_metadata[0]['seg_idx'], 0)
+        self.assertEqual(char_metadata[1]['seg_idx'], 0)
+        self.assertEqual(char_metadata[2]['seg_idx'], 0)
+
+        # "天気が" from segment 1
+        self.assertEqual(char_metadata[3]['seg_idx'], 1)
+
+    def test_deduplicate_preserves_timestamps(self):
+        """Test that metadata preserves original segment timestamps."""
+        subtitles = [
+            {"start": 10.0, "end": 15.0, "text": "ABC"},
+            {"start": 15.0, "end": 20.0, "text": "BCDE"}
+        ]
+
+        merged_text, char_metadata = self.linearizer.deduplicate_with_metadata(subtitles)
+
+        # "A" from seg 0, "BC" overlap, "DE" from seg 1
+        # Merged: "ABCDE"
+        self.assertEqual(merged_text, "ABCDE")
+
+        # Check timestamps are preserved
+        self.assertEqual(char_metadata[0]['seg_start'], 10.0)
+        self.assertEqual(char_metadata[0]['seg_end'], 15.0)
+
+        # "DE" should be from segment 1
+        self.assertEqual(char_metadata[3]['seg_start'], 15.0)
+        self.assertEqual(char_metadata[4]['seg_start'], 15.0)
+
 
 if __name__ == '__main__':
     unittest.main()
