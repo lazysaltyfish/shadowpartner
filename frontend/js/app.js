@@ -98,9 +98,21 @@ createApp({
 
         // YouTube Player API
         const initPlayer = (videoId) => {
+            // Check if we can reuse existing YouTube player
             if (player.value && typeof player.value.loadVideoById === 'function') {
-                player.value.loadVideoById(videoId);
-                return;
+                // Verify the player is still attached to DOM
+                const iframe = player.value.getIframe?.();
+                if (iframe && iframe.parentNode) {
+                    console.log('[Debug] Reusing existing YouTube player for video:', videoId);
+                    player.value.loadVideoById(videoId);
+                    return;
+                }
+                // Player exists but not in DOM, destroy it
+                console.log('[Debug] Player detached from DOM, recreating...');
+                if (typeof player.value.destroy === 'function') {
+                    player.value.destroy();
+                }
+                player.value = null;
             }
 
             // If we have an existing player (even audio), destroy it if switching modes
@@ -118,7 +130,7 @@ createApp({
                 tag.src = "https://www.youtube.com/iframe_api";
                 const firstScriptTag = document.getElementsByTagName('script')[0];
                 firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-                
+
                 window.onYouTubeIframeAPIReady = () => createPlayer(videoId);
             } else {
                 createPlayer(videoId);

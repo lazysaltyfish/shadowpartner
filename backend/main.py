@@ -78,7 +78,12 @@ async def add_cors_headers(request: Request, call_next):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "*"
+        # Cannot use "*" with credentials: true, must echo back the requested headers
+        requested_headers = request.headers.get("access-control-request-headers")
+        if requested_headers:
+            response.headers["Access-Control-Allow-Headers"] = requested_headers
+        else:
+            response.headers["Access-Control-Allow-Headers"] = "content-type, authorization, x-requested-with"
     else:
         # Fallback for some cases where Origin might be missing but we want to be permissive
         # Note: '*' cannot be used with credentials: true

@@ -3,11 +3,11 @@ import os
 import uuid
 import shutil
 
-# Helper to ensure ffmpeg is in path if we installed it locally
+# Helper to ensure ffmpeg and deno are in path if we installed them locally
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOCAL_BIN = os.path.join(BASE_DIR, "bin") 
+LOCAL_BIN = os.path.join(BASE_DIR, "bin")
 if os.path.exists(LOCAL_BIN):
-    os.environ["PATH"] += os.pathsep + LOCAL_BIN
+    os.environ["PATH"] = LOCAL_BIN + os.pathsep + os.environ["PATH"]
 
 class VideoDownloader:
     def __init__(self, download_dir="temp"):
@@ -44,7 +44,11 @@ class VideoDownloader:
             if proxy:
                 ydl_opts['proxy'] = proxy
 
-            ydl_opts['cookiefile'] = 'cookies.txt'
+            # Only use cookies if the file exists
+            if os.path.exists('cookies.txt'):
+                ydl_opts['cookiefile'] = 'cookies.txt'
+                print("DEBUG: Using cookies.txt for authentication")
+
             # Add user-agent to avoid being blocked
             ydl_opts['http_headers'] = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',

@@ -137,9 +137,11 @@
         <!-- Main Content (Player & Subtitles) -->
         <div v-if="videoData" class="flex-1 flex flex-col overflow-hidden gap-4">
 
-            <!-- Video Player Area - Auto Height -->
-            <div class="shrink-0 bg-black rounded-lg overflow-hidden relative shadow-lg">
-                <div id="youtube-player" class="w-full"></div>
+            <!-- Video Player Area - 16:9 Aspect Ratio -->
+            <div class="shrink-0 bg-black rounded-lg overflow-hidden shadow-lg">
+                <div class="w-full relative" style="padding-bottom: 56.25%;">
+                    <div id="youtube-player" class="absolute inset-0"></div>
+                </div>
             </div>
 
             <!-- Subtitles Area - Scrollable Bottom -->
