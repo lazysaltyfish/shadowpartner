@@ -22,6 +22,7 @@ from services.analyzer import JapaneseAnalyzer
 from services.aligner import Aligner
 from services.translator import Translator
 from services.subtitle_linearizer import SubtitleLinearizer
+from services.video_utils import generate_video_id_from_file
 
 # Helper to ensure ffmpeg is in path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -587,22 +588,23 @@ async def complete_upload(
             subtitle_path = os.path.join(upload_dir, subtitle_files[0])
             print(f"Found subtitle for completion: {subtitle_path}")
 
+    # Generate stable video_id based on file content hash
+    video_id = generate_video_id_from_file(temp_file)
+    print(f"Generated video_id: {video_id} for file: {filename}")
+
     tasks[task_id].status = TaskStatus.PENDING
     tasks[task_id].message = "Upload complete. Processing..."
-    
+
     import asyncio
-    # Reuse process_audio_task
-    # Note: we need a video_id (we use task_id as session id)
-    # upload time considered 0 for now as it happened before
     asyncio.create_task(process_audio_task(
-        task_id, 
-        temp_file, 
-        task_id, 
-        filename, 
+        task_id,
+        temp_file,
+        video_id,  # Use hash-based video_id
+        filename,
         download_time=0.0,
         subtitle_path=subtitle_path
     ))
-    
+
     return AsyncProcessResponse(task_id=task_id, message="Processing started")
 
 @app.post("/api/upload", response_model=AsyncProcessResponse)
@@ -649,24 +651,24 @@ async def upload_video(
                 shutil.copyfileobj(subtitle.file, buffer)
                 
             print(f"Subtitle uploaded to: {subtitle_file}")
-        
+
+        # Generate stable video_id based on file content hash
+        video_id = generate_video_id_from_file(temp_file)
+        print(f"Generated video_id: {video_id} for file: {file.filename}")
+
         # Start async task
         task_id = str(uuid.uuid4())
-        
+
         if subtitle_file:
             tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="Files uploaded. Using provided subtitle...")
         else:
             tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="File uploaded. Queued for processing...")
-        
-        # Pass the file path to background task
-        # IMPORTANT: The file is already on disk, so the background task can access it.
-        # We don't need to keep the 'file' object open.
-        
+
         import asyncio
         asyncio.create_task(process_audio_task(
             task_id,
             temp_file,
-            session_id,
+            video_id,  # Use hash-based video_id
             file.filename,
             download_time=0.0,
             subtitle_path=subtitle_file
