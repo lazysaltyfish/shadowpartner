@@ -7,6 +7,8 @@ import shutil
 import uuid
 from enum import Enum
 import time
+import difflib
+import re
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -19,6 +21,7 @@ from services.transcriber import AudioTranscriber
 from services.analyzer import JapaneseAnalyzer
 from services.aligner import Aligner
 from services.translator import Translator
+from services.subtitle_linearizer import SubtitleLinearizer
 
 # Helper to ensure ffmpeg is in path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -130,6 +133,7 @@ class VideoResponse(BaseModel):
     segments: List[Segment]
     metrics: Optional[ProcessingMetrics] = None
     has_word_timestamps: bool = True  # False when using user-provided subtitles (no word-level timing)
+    warnings: List[str] = []
 
 class AsyncProcessResponse(BaseModel):
     task_id: str
@@ -148,6 +152,7 @@ try:
     analyzer = JapaneseAnalyzer()
     aligner = Aligner()
     translator = Translator()
+    subtitle_linearizer = SubtitleLinearizer()
     print(f"All services initialized successfully. Transcriber running on {transcriber.device} (fp16={transcriber.fp16}, model={transcriber.model_size})")
 except Exception as e:
     print(f"CRITICAL: Failed to initialize services: {e}")
@@ -169,6 +174,60 @@ async def run_cpu_bound(func, *args, **kwargs):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
+def check_subtitle_similarity(generated_segments: List[Dict], reference_segments: List[Dict], threshold: float = 0.4) -> List[str]:
+    """
+    Check similarity between generated segments and reference segments.
+    Returns a list of warnings if similarity is low.
+    """
+    if not generated_segments or not reference_segments:
+        return []
+
+    # Helper to extract text from a list of segments
+    def extract_text(segments, sample_ratio=0.2, max_chars=2000):
+        total_len = len(segments)
+        if total_len == 0:
+            return ""
+        
+        # Define ranges: Start, Middle, End
+        count = max(1, int(total_len * sample_ratio))
+        
+        ranges = [
+            (0, count), # Start
+            (total_len // 2 - count // 2, total_len // 2 + count // 2), # Middle
+            (total_len - count, total_len) # End
+        ]
+        
+        text_parts = []
+        for start, end in ranges:
+            start = max(0, start)
+            end = min(total_len, end)
+            if start >= end:
+                continue
+            
+            chunk_text = "".join([seg.get('text', '') for seg in segments[start:end]])
+            text_parts.append(chunk_text)
+            
+        full_text = "".join(text_parts)
+        # Normalize: Remove whitespace and common punctuation
+        normalized = re.sub(r'[\s\u3000\u3001\u3002,.!?]', '', full_text).lower()
+        return normalized[:max_chars * 3] # Cap length just in case
+
+    text_gen = extract_text(generated_segments)
+    text_ref = extract_text(reference_segments)
+    
+    if not text_gen or not text_ref:
+        return []
+
+    # Calculate similarity
+    ratio = difflib.SequenceMatcher(None, text_gen, text_ref).ratio()
+    print(f"[Similarity Check] Score: {ratio:.4f}")
+
+    warnings = []
+    if ratio < threshold:
+        warnings.append(f"Low subtitle match detected (Similarity: {ratio:.0%}). Please check if you uploaded the correct subtitle file.")
+        
+    return warnings
+
 async def process_audio_task(task_id: str, file_path: str, video_id: str, title: str, download_time: float = 0.0, subtitle_path: str = None):
     """
     Process audio/video file and generate learning segments.
@@ -187,6 +246,7 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
     analysis_time = 0.0
     translation_time = 0.0
     has_word_timestamps = True  # Track if we have precise word-level timestamps
+    warnings = []
     
     try:
         # 2. Transcribe (Always run AI for timing reference)
@@ -210,6 +270,19 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
             reference_segments = ref_result['segments']
             print(f"Loaded {len(reference_segments)} segments from user subtitle.")
             
+            # Linearize (Remove scrolling duplicates)
+            print("Linearizing subtitles...")
+            reference_segments = subtitle_linearizer.linearize(reference_segments)
+            print(f"Segments after linearization: {len(reference_segments)}")
+
+            # Check Similarity
+            print("Checking subtitle similarity...")
+            warnings = check_subtitle_similarity(generated_segments, reference_segments, threshold=0.4)
+            if warnings:
+                print(f"[Subtitle Check] Generated warnings: {warnings}")
+            else:
+                print(f"[Subtitle Check] Passed. No warnings generated.")
+
             # Calibrate
             # Run calibration in thread as it might be heavy for large files
             print("Calibrating timestamps...")
@@ -324,7 +397,8 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
             title=title,
             segments=final_segments,
             metrics=metrics,
-            has_word_timestamps=has_word_timestamps
+            has_word_timestamps=has_word_timestamps,
+            warnings=warnings
         )
         
         update_task(task_id, TaskStatus.COMPLETED, 100, "Completed", result=final_response)
@@ -437,7 +511,8 @@ async def upload_chunk(
     # We need to recover the extension or store it. 
     # Actually we can just find the file starting with task_id in temp
     upload_dir = "temp"
-    files = [f for f in os.listdir(upload_dir) if f.startswith(task_id)]
+    # Exclude subtitle files to avoid appending to them by mistake
+    files = [f for f in os.listdir(upload_dir) if f.startswith(task_id) and "_subtitle" not in f]
     if not files:
         raise HTTPException(status_code=404, detail="Upload session not found")
     
@@ -486,7 +561,8 @@ async def complete_upload(
         raise HTTPException(status_code=404, detail="Task not found")
     
     upload_dir = "temp"
-    files = [f for f in os.listdir(upload_dir) if f.startswith(task_id)]
+    # Exclude subtitle files so we don't accidentally select the subtitle as the video source
+    files = [f for f in os.listdir(upload_dir) if f.startswith(task_id) and "_subtitle" not in f]
     if not files:
         raise HTTPException(status_code=404, detail="File not found")
     

@@ -14,6 +14,7 @@ createApp({
         const selectedSubtitleFile = ref(null);
         const fileInput = ref(null);
         const subtitleInput = ref(null);
+        const warnings = ref([]);
         const isFileMode = ref(false); // New state to track if we're using file or URL
         const contextRange = ref(2); // Number of segments to show before and after current
         const backendStatus = ref({
@@ -396,6 +397,7 @@ createApp({
             
             loading.value = true;
             videoData.value = null;
+            warnings.value = [];
             taskStatus.value = { status: 'pending', progress: 0, message: 'Initializing...' };
             
             try {
@@ -506,6 +508,15 @@ createApp({
                         }
 
                         videoData.value = statusData.result;
+                        
+                        console.log('[Debug] Processing warnings:', statusData.result.warnings);
+                        if (statusData.result.warnings && statusData.result.warnings.length > 0) {
+                            warnings.value = statusData.result.warnings;
+                            console.log('[Debug] Warnings set to UI:', warnings.value);
+                        } else {
+                            warnings.value = [];
+                        }
+
                         loading.value = false; // Turn off loading BEFORE initPlayer
                         
                         // Check if segments exist
@@ -566,6 +577,8 @@ createApp({
             videoUrl,
             loading,
             videoData,
+            warnings,
+            closeWarnings: () => { warnings.value = []; },
             visibleSegments, // Export this so template can use it
             contextRange,    // Export for potential UI control
             processVideo,
