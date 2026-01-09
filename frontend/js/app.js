@@ -190,11 +190,20 @@ createApp({
             // Auto-resize container based on video aspect ratio
             art.on('video:loadedmetadata', () => {
                 const video = art.video;
-                const aspectRatio = video.videoWidth / video.videoHeight;
                 const containerWidth = artContainer.clientWidth;
-                const newHeight = containerWidth / aspectRatio;
-                artContainer.style.height = `${newHeight}px`;
-                console.log('[ArtPlayer] Resized to:', containerWidth, 'x', newHeight, 'aspect ratio:', aspectRatio);
+
+                // Check if it's audio-only (no video dimensions)
+                if (video.videoWidth === 0 || video.videoHeight === 0) {
+                    // Audio-only: use 21:9 aspect ratio
+                    const newHeight = containerWidth / (21 / 9);
+                    artContainer.style.height = `${newHeight}px`;
+                    console.log('[ArtPlayer] Audio-only mode, using 21:9 aspect ratio:', containerWidth, 'x', newHeight);
+                } else {
+                    const aspectRatio = video.videoWidth / video.videoHeight;
+                    const newHeight = containerWidth / aspectRatio;
+                    artContainer.style.height = `${newHeight}px`;
+                    console.log('[ArtPlayer] Resized to:', containerWidth, 'x', newHeight, 'aspect ratio:', aspectRatio);
+                }
             });
 
             // Listen for time updates
