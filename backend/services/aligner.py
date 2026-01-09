@@ -1,5 +1,11 @@
 import difflib
-from typing import List, Dict, Tuple, Optional
+from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
+
+from utils.logger import get_logger
+
+# Setup logger
+logger = get_logger(__name__)
 
 
 class Aligner:
@@ -151,8 +157,6 @@ class Aligner:
             return []
 
         timestamps = []
-        # Group by segment and distribute within each
-        from collections import defaultdict
         seg_chars = defaultdict(list)
 
         for i, meta in enumerate(char_metadata):
@@ -270,7 +274,6 @@ class Aligner:
         if not merged_text:
             return []
 
-        from collections import defaultdict
         seg_chars = defaultdict(list)
 
         for i, (char, meta, ts) in enumerate(

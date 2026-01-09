@@ -1,16 +1,20 @@
 import MeCab
-import re
+
+from utils.logger import get_logger
+
+# Setup logger
+logger = get_logger(__name__)
+
 
 class JapaneseAnalyzer:
     def __init__(self):
-        # Initializing MeCab. 
-        # Note: In some environments, arguments might be needed like '-r /etc/mecabrc' 
-        # but with mecab-python3 + unidic-lite, no args is usually best.
         try:
-            self.tagger = MeCab.Tagger() 
-        except RuntimeError:
-            # Fallback attempts if default init fails
+            self.tagger = MeCab.Tagger()
+            logger.info("MeCab initialized successfully")
+        except RuntimeError as e:
+            logger.warning(f"MeCab default init failed, trying fallback: {e}")
             self.tagger = MeCab.Tagger("-r /dev/null")
+            logger.info("MeCab initialized with fallback configuration")
 
     def analyze(self, text: str):
         """

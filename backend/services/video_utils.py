@@ -1,6 +1,11 @@
 import hashlib
 import os
 
+from utils.logger import get_logger
+
+# Setup logger
+logger = get_logger(__name__)
+
 
 def generate_video_id_from_file(file_path: str) -> str:
     """
@@ -17,19 +22,20 @@ def generate_video_id_from_file(file_path: str) -> str:
         'upload_a1b2c3d4e5f6g7h8'
     """
     if not os.path.exists(file_path):
+        logger.error(f"File not found: {file_path}")
         raise FileNotFoundError(f"File not found: {file_path}")
 
     hash_sha256 = hashlib.sha256()
 
     with open(file_path, "rb") as f:
-        # 读取文件的前 10MB
         chunk = f.read(10 * 1024 * 1024)
         hash_sha256.update(chunk)
 
-    # 使用前 16 个字符的哈希值
     hash_hex = hash_sha256.hexdigest()[:16]
+    video_id = f"upload_{hash_hex}"
 
-    return f"upload_{hash_hex}"
+    logger.debug(f"Generated video_id: {video_id} for file: {file_path}")
+    return video_id
 
 
 def get_video_source(video_id: str) -> str:

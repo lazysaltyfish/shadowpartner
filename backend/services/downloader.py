@@ -1,13 +1,17 @@
-import yt_dlp
 import os
-import uuid
 import shutil
+import uuid
 
-# Helper to ensure ffmpeg and deno are in path if we installed them locally
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOCAL_BIN = os.path.join(BASE_DIR, "bin")
-if os.path.exists(LOCAL_BIN):
-    os.environ["PATH"] = LOCAL_BIN + os.pathsep + os.environ["PATH"]
+import yt_dlp
+
+from utils.logger import get_logger
+from utils.path_setup import setup_local_bin_path
+
+# Setup logger
+logger = get_logger(__name__)
+
+# Setup local bin path
+setup_local_bin_path()
 
 class VideoDownloader:
     def __init__(self, download_dir="temp"):
@@ -18,17 +22,16 @@ class VideoDownloader:
     def download_audio(self, url: str) -> tuple[str, dict]:
         session_id = str(uuid.uuid4())
         output_template = os.path.join(self.download_dir, f"{session_id}.%(ext)s")
-        
+
         # Check if we have ffmpeg
         has_ffmpeg = shutil.which("ffmpeg") is not None
-        print(f"DEBUG: FFmpeg available: {has_ffmpeg}")
+        logger.info(f"FFmpeg available: {has_ffmpeg}")
         
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': output_template,
-            'quiet': True,
-            'no_warnings': True,
-            'verbose': True,
+            'quiet': False,
+            'no_warnings': False,
         }
         
         if has_ffmpeg:
@@ -47,7 +50,7 @@ class VideoDownloader:
             # Only use cookies if the file exists
             if os.path.exists('cookies.txt'):
                 ydl_opts['cookiefile'] = 'cookies.txt'
-                print("DEBUG: Using cookies.txt for authentication")
+                logger.info("Using cookies.txt for authentication")
 
             # Add user-agent to avoid being blocked
             ydl_opts['http_headers'] = {
@@ -55,25 +58,25 @@ class VideoDownloader:
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-us,en;q=0.5',
             }
-                
+
+            logger.info(f"Starting download from URL: {url}")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-                # If we converted, extension is mp3. If not, it's whatever source was (m4a, webm)
                 ext = info['ext']
                 if has_ffmpeg:
                     ext = 'mp3'
-                
+
                 final_path = os.path.join(self.download_dir, f"{session_id}.{ext}")
-                
+
                 # Double check file existence
                 if not os.path.exists(final_path):
-                    # Sometimes yt-dlp doesn't return the exact final extension in info['ext'] after post-processing
-                    # We might need to look for it
                     for file in os.listdir(self.download_dir):
                         if file.startswith(session_id):
                             final_path = os.path.join(self.download_dir, file)
                             break
 
+                logger.info(f"Download completed: {final_path}")
                 return final_path, info
         except Exception as e:
+            logger.error(f"Download failed: {e}", exc_info=True)
             raise Exception(f"Download failed: {str(e)}")

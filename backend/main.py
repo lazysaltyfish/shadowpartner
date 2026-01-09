@@ -1,62 +1,83 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request, BackgroundTasks, Form
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-import os
-import shutil
-import uuid
-from enum import Enum
-import time
+import asyncio
 import difflib
+import os
 import re
+import shutil
+import time
+import traceback
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from enum import Enum
+from functools import partial
+from typing import Any, Dict, List, Optional
+
+import fastapi
 from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel
+
+from services.aligner import Aligner
+from services.analyzer import JapaneseAnalyzer
+from services.downloader import VideoDownloader
+from services.subtitle_linearizer import SubtitleLinearizer
+from services.transcriber import AudioTranscriber
+from services.translator import Translator
+from services.video_utils import generate_video_id_from_file
+from utils.logger import get_logger
+from utils.path_setup import setup_local_bin_path
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Import Services
-# Note: Ensure these files exist and are in python path
-from services.downloader import VideoDownloader
-from services.transcriber import AudioTranscriber
-from services.analyzer import JapaneseAnalyzer
-from services.aligner import Aligner
-from services.translator import Translator
-from services.subtitle_linearizer import SubtitleLinearizer
-from services.video_utils import generate_video_id_from_file
+# Setup logger
+logger = get_logger(__name__)
 
-# Helper to ensure ffmpeg is in path
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOCAL_BIN = os.path.join(BASE_DIR, "bin") 
-if os.path.exists(LOCAL_BIN) and LOCAL_BIN not in os.environ["PATH"]:
-    print(f"Adding local bin to PATH: {LOCAL_BIN}")
-    os.environ["PATH"] += os.pathsep + LOCAL_BIN
+# Setup local bin path
+local_bin = setup_local_bin_path()
+if local_bin:
+    logger.info(f"Added local bin to PATH: {local_bin}")
 
 app = FastAPI(title="ShadowPartner API")
 
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize resources on startup."""
+    global executor
+    executor = ThreadPoolExecutor(max_workers=4)
+    logger.info("ThreadPoolExecutor initialized with 4 workers")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup resources on shutdown."""
+    global executor
+    if executor:
+        logger.info("Shutting down ThreadPoolExecutor")
+        executor.shutdown(wait=True)
+        logger.info("ThreadPoolExecutor shutdown complete")
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    print(f"Incoming request: {request.method} {request.url}")
+    # Skip logging for frequent/unimportant requests
+    skip_paths = ["/api/status/", "/api/upload/chunk", "/"]
+    should_log = not any(path in str(request.url) for path in skip_paths)
+
+    if should_log:
+        logger.info(f"Incoming request: {request.method} {request.url}")
+
     try:
         response = await call_next(request)
-        print(f"Response status: {response.status_code}")
+
+        # Only log non-200 responses for important endpoints
+        if should_log and response.status_code != 200:
+            logger.info(f"Response status: {response.status_code}")
+
         return response
     except Exception as e:
-        print(f"Request failed: {e}")
+        logger.error(f"Request failed: {e}", exc_info=True)
         raise e
-
-# Configure CORS
-# Note: allow_origins=["*"] cannot be used with allow_credentials=True in strict browsers
-# We use allow_origin_regex to match Codespaces/Gitpod domains dynamically
-# app.add_middleware(
-#     CORSMiddleware,
-#     # Updated regex to be more permissive for various github codespaces subdomains
-#     allow_origin_regex=r"https://.*\.app\.github\.dev|https://.*\.gitpod\.io",
-#     # Added explicit port 3000 which is common for some frontend dev servers
-#     allow_origins=["http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:5500", "http://127.0.0.1:5500", "http://localhost:3000"],
-#     allow_credentials=True,
-#     allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"],
-#     allow_headers=["*"],
-# )
 
 @app.middleware("http")
 async def add_cors_headers(request: Request, call_next):
@@ -67,8 +88,7 @@ async def add_cors_headers(request: Request, call_next):
         try:
             response = await call_next(request)
         except Exception as e:
-            print(f"Request failed: {e}")
-            # Ensure we still return a response to attach headers to, even on error
+            logger.error(f"Request failed in CORS middleware: {e}", exc_info=True)
             response = fastapi.Response(status_code=500)
             
     origin = request.headers.get("origin")
@@ -89,10 +109,9 @@ async def add_cors_headers(request: Request, call_next):
         # Fallback for some cases where Origin might be missing but we want to be permissive
         # Note: '*' cannot be used with credentials: true
         pass 
-    
+
     return response
 
-import fastapi
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
@@ -110,6 +129,9 @@ class TaskInfo(BaseModel):
 
 # In-memory task store (Use Redis/DB in production)
 tasks: Dict[str, TaskInfo] = {}
+
+# Global thread pool executor for CPU-bound tasks
+executor: Optional[ThreadPoolExecutor] = None
 
 class VideoRequest(BaseModel):
     url: str
@@ -146,24 +168,22 @@ class AsyncProcessResponse(BaseModel):
     message: str
 
 # Initialize Services
-# We initialize them here so they are ready when requests come in
 try:
-    # Check for configuration via Env Vars
-    whisper_device = os.getenv("WHISPER_DEVICE", None) # Default to None (Auto)
+    whisper_device = os.getenv("WHISPER_DEVICE", None)
     whisper_fp16 = os.getenv("WHISPER_FP16", "False").lower() == "true"
     whisper_model_size = os.getenv("WHISPER_MODEL_SIZE", "base")
     subtitle_similarity_threshold = float(os.getenv("SUBTITLE_SIMILARITY_THRESHOLD", "0.1"))
-    
+
+    logger.info("Initializing services...")
     downloader = VideoDownloader()
     transcriber = AudioTranscriber(model_size=whisper_model_size, device=whisper_device, fp16=whisper_fp16)
     analyzer = JapaneseAnalyzer()
     aligner = Aligner()
     translator = Translator()
     subtitle_linearizer = SubtitleLinearizer()
-    print(f"All services initialized successfully. Transcriber running on {transcriber.device} (fp16={transcriber.fp16}, model={transcriber.model_size})")
+    logger.info(f"All services initialized successfully. Transcriber running on {transcriber.device} (fp16={transcriber.fp16}, model={transcriber.model_size})")
 except Exception as e:
-    print(f"CRITICAL: Failed to initialize services: {e}")
-    # We don't exit, but endpoints might fail
+    logger.critical(f"Failed to initialize services: {e}", exc_info=True)
 
 def update_task(task_id: str, status: TaskStatus, progress: int = 0, message: str = "", result: Any = None, error: str = None):
     if task_id in tasks:
@@ -176,10 +196,9 @@ def update_task(task_id: str, status: TaskStatus, progress: int = 0, message: st
             tasks[task_id].error = error
 
 async def run_cpu_bound(func, *args, **kwargs):
-    import asyncio
-    from functools import partial
+    """Run CPU-bound function in thread pool executor."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, partial(func, *args, **kwargs))
+    return await loop.run_in_executor(executor, partial(func, *args, **kwargs))
 
 def check_subtitle_similarity(generated_segments: List[Dict], reference_segments: List[Dict], threshold: float = 0.1) -> List[str]:
     """
@@ -227,12 +246,14 @@ def check_subtitle_similarity(generated_segments: List[Dict], reference_segments
 
     # Calculate similarity
     ratio = difflib.SequenceMatcher(None, text_gen, text_ref).ratio()
-    print(f"[Similarity Check] Score: {ratio:.4f}")
+    logger.info(f"Subtitle similarity score: {ratio:.4f}")
 
     warnings = []
     if ratio < threshold:
-        warnings.append(f"Low subtitle match detected (Similarity: {ratio:.0%}). Please check if you uploaded the correct subtitle file.")
-        
+        warning_msg = f"Low subtitle match detected (Similarity: {ratio:.0%}). Please check if you uploaded the correct subtitle file."
+        logger.warning(warning_msg)
+        warnings.append(warning_msg)
+
     return warnings
 
 async def process_audio_task(task_id: str, file_path: str, video_id: str, title: str, download_time: float = 0.0, subtitle_path: str = None):
@@ -258,42 +279,41 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
     try:
         # 2. Transcribe (Always run AI for timing reference)
         update_task(task_id, TaskStatus.PROCESSING, 10, "Transcribing audio (Generating Timing Reference)...")
-        print("Transcribing audio for timing reference...")
+        logger.info(f"Task {task_id}: Starting transcription for timing reference")
         t0 = time.time()
-        # Run synchronous transcribe in a thread
         gen_result = await run_cpu_bound(transcriber.transcribe, file_path, language="ja")
         generated_segments = gen_result['segments']
         transcribe_time = time.time() - t0
+        logger.info(f"Task {task_id}: Transcription completed in {transcribe_time:.2f}s")
         
         reference_segments = []
 
         # 3. Load & Calibrate User Subtitle (if provided)
         if subtitle_path and os.path.exists(subtitle_path):
             update_task(task_id, TaskStatus.PROCESSING, 30, "Loading and Calibrating User Subtitle...")
-            print("Loading user-provided subtitle file...")
+            logger.info(f"Task {task_id}: Loading user-provided subtitle file")
 
             # Load Reference
             ref_result = await run_cpu_bound(transcriber.load_subtitle, subtitle_path)
             raw_reference_segments = ref_result['segments']
-            print(f"Loaded {len(raw_reference_segments)} segments from user subtitle.")
+            logger.info(f"Task {task_id}: Loaded {len(raw_reference_segments)} segments from user subtitle")
 
             # Deduplicate scrolling subtitles with metadata tracking
-            print("Deduplicating scrolling subtitles...")
+            logger.info(f"Task {task_id}: Deduplicating scrolling subtitles")
             merged_text, char_metadata = subtitle_linearizer.deduplicate_with_metadata(raw_reference_segments)
-            print(f"Merged text length: {len(merged_text)} chars")
+            logger.info(f"Task {task_id}: Merged text length: {len(merged_text)} chars")
 
             # Check Similarity using merged text vs AI text
-            print("Checking subtitle similarity...")
-            # Create a temporary segment list for similarity check
+            logger.info(f"Task {task_id}: Checking subtitle similarity")
             temp_ref_segments = [{'text': merged_text, 'start': 0, 'end': 0}]
             warnings = check_subtitle_similarity(generated_segments, temp_ref_segments, threshold=subtitle_similarity_threshold)
             if warnings:
-                print(f"[Subtitle Check] Generated warnings: {warnings}")
+                logger.warning(f"Task {task_id}: Subtitle check warnings: {warnings}")
             else:
-                print(f"[Subtitle Check] Passed. No warnings generated.")
+                logger.info(f"Task {task_id}: Subtitle check passed")
 
             # Calibrate timestamps using new method
-            print("Calibrating timestamps...")
+            logger.info(f"Task {task_id}: Calibrating timestamps")
             _, char_timestamps = await run_cpu_bound(
                 aligner.calibrate_from_merged,
                 merged_text,
@@ -302,11 +322,11 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
             )
 
             # Rebuild segments with calibrated timestamps
-            print("Rebuilding segments...")
+            logger.info(f"Task {task_id}: Rebuilding segments")
             reference_segments = aligner.rebuild_segments_with_timestamps(
                 merged_text, char_metadata, char_timestamps
             )
-            print(f"Rebuilt {len(reference_segments)} segments with timestamps")
+            logger.info(f"Task {task_id}: Rebuilt {len(reference_segments)} segments with timestamps")
 
             has_word_timestamps = True
             
@@ -316,13 +336,11 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
             has_word_timestamps = True
         
         update_task(task_id, TaskStatus.PROCESSING, 40, "Analyzing Japanese text...")
-        
+
         # 4. Process Segments (Analyze & Align)
-        print(f"Analyzing {len(reference_segments)} segments...")
+        logger.info(f"Task {task_id}: Analyzing {len(reference_segments)} segments")
         final_segments = []
         raw_texts = []
-        
-        total_segments = len(reference_segments)
         
         # We can also offload the analysis loop if it's heavy, but let's see. 
         # For now, let's keep it in the loop but yield control occasionally if needed.
@@ -332,15 +350,12 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
             processed_segments = []
             texts = []
             for i, seg in enumerate(segments):
-                # We can't update task progress easily from inside this sync function without callback
-                # So we might split this up.
                 text = seg['text'].strip()
                 if not text:
                     continue
                 texts.append(text)
                 whisper_words = seg.get('words', [])
                 mecab_tokens = analyzer.analyze(text)
-                # Pass segment timestamps for cases where word-level timestamps are not available
                 aligned_tokens = aligner.align(
                     whisper_words,
                     mecab_tokens,
@@ -373,7 +388,7 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
         update_task(task_id, TaskStatus.PROCESSING, 70, "Translating to Chinese...")
 
         # 4. Translate
-        print("Translating segments...")
+        logger.info(f"Task {task_id}: Translating {len(raw_texts)} segments")
         t0 = time.time()
         # Translation involves network I/O. We updated translator to be async and concurrent.
         translations = await translator.translate_batch(raw_texts)
@@ -383,8 +398,8 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
         for i, trans in enumerate(translations):
             if i < len(final_segments):
                 final_segments[i].translation = trans
-            
-        print("Processing complete.")
+
+        logger.info(f"Task {task_id}: Processing complete")
         
         total_time = (time.time() - start_total) + download_time
         
@@ -396,12 +411,12 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
             total_time=total_time
         )
         
-        print(f"[Metrics] Task {task_id} Completed. "
-              f"Download: {metrics.download_time:.2f}s, "
-              f"Transcribe: {metrics.transcribe_time:.2f}s, "
-              f"Analysis: {metrics.analysis_time:.2f}s, "
-              f"Translation: {metrics.translation_time:.2f}s, "
-              f"Total: {metrics.total_time:.2f}s")
+        logger.info(f"Task {task_id} completed - "
+                   f"Download: {metrics.download_time:.2f}s, "
+                   f"Transcribe: {metrics.transcribe_time:.2f}s, "
+                   f"Analysis: {metrics.analysis_time:.2f}s, "
+                   f"Translation: {metrics.translation_time:.2f}s, "
+                   f"Total: {metrics.total_time:.2f}s")
         
         final_response = VideoResponse(
             video_id=video_id,
@@ -415,23 +430,23 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
         update_task(task_id, TaskStatus.COMPLETED, 100, "Completed", result=final_response)
 
     except Exception as e:
-        print(f"Error processing audio: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Task {task_id} failed: {e}", exc_info=True)
         update_task(task_id, TaskStatus.FAILED, 0, "Processing failed", error=str(e))
     finally:
         # Cleanup audio/video file
         if file_path and os.path.exists(file_path):
             try:
                 os.remove(file_path)
-            except:
-                pass
+                logger.debug(f"Cleaned up file: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup file {file_path}: {e}")
         # Cleanup subtitle file if provided
         if subtitle_path and os.path.exists(subtitle_path):
             try:
                 os.remove(subtitle_path)
-            except:
-                pass
+                logger.debug(f"Cleaned up subtitle: {subtitle_path}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup subtitle {subtitle_path}: {e}")
 
 
 @app.get("/api/status/{task_id}", response_model=TaskInfo)
@@ -451,40 +466,35 @@ async def process_video(request: VideoRequest, background_tasks: BackgroundTasks
     try:
         task_id = str(uuid.uuid4())
         tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="Downloading video...")
-        
-        # 1. Download (Synchronous part to fail fast if URL invalid, or could be async too)
-        # Moving download to background to avoid timeout
-        import asyncio
+        logger.info(f"Starting video processing task {task_id} for URL: {request.url}")
+
         asyncio.create_task(download_and_process(task_id, request.url))
-        
+
         return AsyncProcessResponse(task_id=task_id, message="Video processing started")
 
     except Exception as e:
-        print(f"Error starting video processing: {e}")
+        logger.error(f"Error starting video processing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 async def download_and_process(task_id: str, url: str):
     temp_file = None
     try:
         update_task(task_id, TaskStatus.PROCESSING, 5, "Downloading video...")
-        print(f"Processing URL: {url}")
-        
+        logger.info(f"Task {task_id}: Downloading from URL: {url}")
+
         t0 = time.time()
         temp_file, info = downloader.download_audio(url)
         download_time = time.time() - t0
-        
+
         video_title = info.get('title', 'Unknown Video')
         video_id = info.get('id', 'unknown_id')
-        
+        logger.info(f"Task {task_id}: Download completed in {download_time:.2f}s - {video_title}")
+
         await process_audio_task(task_id, temp_file, video_id, video_title, download_time=download_time)
     except Exception as e:
-         update_task(task_id, TaskStatus.FAILED, 0, "Download failed", error=str(e))
+        logger.error(f"Task {task_id}: Download failed - {e}", exc_info=True)
+        update_task(task_id, TaskStatus.FAILED, 0, "Download failed", error=str(e))
 
-
-class ChunkUpload(BaseModel):
-    task_id: str
-    chunk_index: int
-    total_chunks: int
 
 @app.post("/api/upload/init", response_model=AsyncProcessResponse)
 async def init_upload(filename: str = Form(...)):
@@ -492,15 +502,16 @@ async def init_upload(filename: str = Form(...)):
     upload_dir = "temp"
     if not os.path.exists(upload_dir):
         os.makedirs(upload_dir)
-        
+
     ext = os.path.splitext(filename)[1] or ".mp3"
     temp_file = os.path.join(upload_dir, f"{task_id}{ext}")
-    
-    # Create empty file
-    open(temp_file, 'wb').close()
-    
+
+    with open(temp_file, 'wb') as f:
+        pass
+
     tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="Initialized upload...")
-    
+    logger.info(f"Upload initialized: task_id={task_id}, filename={filename}")
+
     return AsyncProcessResponse(task_id=task_id, message="Upload initialized")
 
 @app.post("/api/upload/chunk")
@@ -511,29 +522,19 @@ async def upload_chunk(
 ):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
-        
-    # We assume simple sequential upload for now (appending)
-    # Ideally we'd write to specific offsets but for this demo appending is fine if sequential
-    # But wait, concurrent chunks might mess this up. 
-    # For safety, let's write to part files then merge? 
-    # Or just assume frontend sends sequentially (easier).
-    
-    # Let's verify file exists
-    # We need to recover the extension or store it. 
-    # Actually we can just find the file starting with task_id in temp
+
     upload_dir = "temp"
-    # Exclude subtitle files to avoid appending to them by mistake
     files = [f for f in os.listdir(upload_dir) if f.startswith(task_id) and "_subtitle" not in f]
     if not files:
         raise HTTPException(status_code=404, detail="Upload session not found")
-    
+
     temp_file = os.path.join(upload_dir, files[0])
-    
-    # Append chunk
+
     with open(temp_file, "ab") as f:
         shutil.copyfileobj(file.file, f)
-        
+
     tasks[task_id].message = f"Uploaded chunk {chunk_index + 1}"
+    logger.debug(f"Task {task_id}: Uploaded chunk {chunk_index + 1}")
     return {"status": "success"}
 
 @app.post("/api/upload/subtitle")
@@ -558,8 +559,8 @@ async def upload_subtitle(
     
     with open(subtitle_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    
-    print(f"Subtitle uploaded for task {task_id}: {subtitle_path}")
+
+    logger.info(f"Task {task_id}: Subtitle uploaded - {subtitle_path}")
     return {"status": "success", "path": subtitle_path}
 
 @app.post("/api/upload/complete", response_model=AsyncProcessResponse)
@@ -586,16 +587,15 @@ async def complete_upload(
         subtitle_files = [f for f in os.listdir(upload_dir) if f.startswith(f"{task_id}_subtitle")]
         if subtitle_files:
             subtitle_path = os.path.join(upload_dir, subtitle_files[0])
-            print(f"Found subtitle for completion: {subtitle_path}")
+            logger.info(f"Task {task_id}: Found subtitle for completion - {subtitle_path}")
 
     # Generate stable video_id based on file content hash
     video_id = generate_video_id_from_file(temp_file)
-    print(f"Generated video_id: {video_id} for file: {filename}")
+    logger.info(f"Task {task_id}: Generated video_id={video_id} for file={filename}")
 
     tasks[task_id].status = TaskStatus.PENDING
     tasks[task_id].message = "Upload complete. Processing..."
 
-    import asyncio
     asyncio.create_task(process_audio_task(
         task_id,
         temp_file,
@@ -639,8 +639,8 @@ async def upload_video(
         
         with open(temp_file, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-            
-        print(f"File uploaded to: {temp_file}")
+
+        logger.info(f"File uploaded: {temp_file}")
         
         # Save subtitle file if provided
         if subtitle and subtitle.filename:
@@ -649,12 +649,12 @@ async def upload_video(
             
             with open(subtitle_file, "wb") as buffer:
                 shutil.copyfileobj(subtitle.file, buffer)
-                
-            print(f"Subtitle uploaded to: {subtitle_file}")
+
+            logger.info(f"Subtitle uploaded: {subtitle_file}")
 
         # Generate stable video_id based on file content hash
         video_id = generate_video_id_from_file(temp_file)
-        print(f"Generated video_id: {video_id} for file: {file.filename}")
+        logger.info(f"Generated video_id: {video_id} for file: {file.filename}")
 
         # Start async task
         task_id = str(uuid.uuid4())
@@ -664,7 +664,7 @@ async def upload_video(
         else:
             tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="File uploaded. Queued for processing...")
 
-        import asyncio
+        logger.info(f"Starting processing task {task_id} for uploaded file")
         asyncio.create_task(process_audio_task(
             task_id,
             temp_file,
@@ -677,18 +677,18 @@ async def upload_video(
         return AsyncProcessResponse(task_id=task_id, message="File uploaded, processing started")
 
     except Exception as e:
-        print(f"Error processing uploaded file: {e}")
+        logger.error(f"Error processing uploaded file: {e}", exc_info=True)
         # Cleanup if we failed before starting task
         if temp_file and os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
-            except:
-                pass
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
         if subtitle_file and os.path.exists(subtitle_file):
             try:
                 os.remove(subtitle_file)
-            except:
-                pass
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup subtitle file: {cleanup_error}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

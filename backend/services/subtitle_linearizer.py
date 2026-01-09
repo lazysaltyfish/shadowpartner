@@ -1,5 +1,12 @@
 import re
-from typing import List, Dict, Tuple
+from collections import defaultdict
+from typing import Dict, List, Tuple
+
+from utils.logger import get_logger
+
+# Setup logger
+logger = get_logger(__name__)
+
 
 class SubtitleLinearizer:
     """
@@ -97,7 +104,6 @@ class SubtitleLinearizer:
             return []
 
         # Group characters by their source segment
-        from collections import defaultdict
         segments_chars = defaultdict(list)
 
         for i, (char, meta) in enumerate(zip(merged_text, char_metadata)):

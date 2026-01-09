@@ -1,14 +1,17 @@
-import whisper
 import os
-import torch
 import re
 
-# Helper to ensure ffmpeg is in path
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOCAL_BIN = os.path.join(BASE_DIR, "bin")
-if os.path.exists(LOCAL_BIN) and LOCAL_BIN not in os.environ["PATH"]:
-    print(f"Adding local bin to PATH: {LOCAL_BIN}")
-    os.environ["PATH"] += os.pathsep + LOCAL_BIN
+import torch
+import whisper
+
+from utils.logger import get_logger
+from utils.path_setup import setup_local_bin_path
+
+# Setup logger
+logger = get_logger(__name__)
+
+# Setup local bin path
+setup_local_bin_path()
 
 
 def parse_srt_time(time_str: str) -> float:
@@ -102,12 +105,12 @@ class AudioTranscriber:
         else:
             self.device = device
             
-        print(f"Loading Whisper model ({self.model_size}) on {self.device} with fp16={self.fp16}...")
+        logger.info(f"Loading Whisper model ({self.model_size}) on {self.device} with fp16={self.fp16}")
         try:
             self.model = whisper.load_model(self.model_size, device=self.device)
-            print("Whisper model loaded.")
+            logger.info("Whisper model loaded successfully")
         except Exception as e:
-            print(f"Error loading Whisper model: {e}")
+            logger.error(f"Error loading Whisper model: {e}", exc_info=True)
             self.model = None
 
     def transcribe(self, audio_path: str, language: str = None):
@@ -130,10 +133,10 @@ class AudioTranscriber:
         if language:
             options["language"] = language
 
-        # Transcribe
-        # Note: This is blocking. In a real app, run in a thread pool or background task.
+        logger.info(f"Starting transcription for: {audio_path}")
         result = self.model.transcribe(audio_path, **options)
-        
+        logger.info(f"Transcription completed: {len(result.get('segments', []))} segments")
+
         return result
 
     def load_subtitle(self, subtitle_path: str = None, subtitle_content: str = None) -> dict:
@@ -165,20 +168,24 @@ class AudioTranscriber:
                 try:
                     with open(subtitle_path, 'r', encoding=encoding) as f:
                         content = f.read()
+                    logger.debug(f"Successfully decoded subtitle with encoding: {encoding}")
                     break
                 except UnicodeDecodeError:
+                    logger.debug(f"Failed to decode with encoding: {encoding}")
                     continue
-            
+
             if content is None:
+                logger.error(f"Could not decode subtitle file with any supported encoding: {subtitle_path}")
                 raise ValueError(f"Could not decode subtitle file with any supported encoding: {subtitle_path}")
             
             subtitle_content = content
         
         segments = parse_srt(subtitle_content)
-        
+
         if not segments:
+            logger.error("No valid subtitle segments found in the provided content")
             raise ValueError("No valid subtitle segments found in the provided content.")
-        
-        print(f"Loaded {len(segments)} subtitle segments from user-provided file.")
-        
+
+        logger.info(f"Loaded {len(segments)} subtitle segments from user-provided file")
+
         return {'segments': segments}

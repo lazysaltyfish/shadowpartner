@@ -1,29 +1,34 @@
-import os
 import asyncio
-from google import genai
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import List
-import time
-import logging
 
-# Setup Logger
-logger = logging.getLogger(__name__)
-# Ensure logging level is set to at least INFO so we can see the logs
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+from google import genai
 
-# Setup API Key from environment variable
-# Note: In main.py we load dotenv, so this should be populated if main.py is entry point.
-# If running standalone, might need load_dotenv() here too.
-API_KEY = os.environ.get("GEMINI_API_KEY")
+from utils.logger import get_logger
+
+# Setup logger
+logger = get_logger(__name__)
+
 
 class Translator:
     def __init__(self):
+        # Read API key at initialization time (after load_dotenv() in main.py)
+        api_key = os.environ.get("GEMINI_API_KEY")
+
         self.client = None
-        if API_KEY:
-            self.client = genai.Client(api_key=API_KEY)
-        self.available = bool(API_KEY)
+        if api_key:
+            self.client = genai.Client(api_key=api_key)
+        self.available = bool(api_key)
         self.model_id = os.environ.get("GEMINI_MODEL_ID", "gemini-3-flash-preview")
         self.chunk_size = int(os.environ.get("TRANSLATE_BATCH_CHUNK_SIZE", 50))
+        self.executor = ThreadPoolExecutor(max_workers=4)
         logger.info(f"Translator initialized with model: {self.model_id}, chunk size: {self.chunk_size}")
+
+    def __del__(self):
+        """Cleanup executor on deletion."""
+        if hasattr(self, 'executor') and self.executor:
+            self.executor.shutdown(wait=False)
 
     def translate(self, text: str, target_lang: str = "Chinese") -> str:
         if not self.available:
@@ -115,7 +120,7 @@ class Translator:
             chunk = texts[i:i + self.chunk_size]
             chunk_index = i // self.chunk_size
             # Run the synchronous _process_chunk in a thread pool
-            tasks.append(loop.run_in_executor(None, self._process_chunk, chunk, chunk_index, target_lang))
+            tasks.append(loop.run_in_executor(self.executor, self._process_chunk, chunk, chunk_index, target_lang))
             
         # Wait for all chunks to complete
         chunk_results_list = await asyncio.gather(*tasks)
