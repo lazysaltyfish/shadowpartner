@@ -26,6 +26,7 @@ from services.translator import Translator
 from services.video_utils import generate_video_id_from_file
 from utils.logger import get_logger
 from utils.path_setup import setup_local_bin_path
+from utils.task_manager import TaskManager
 
 # Setup logger
 logger = get_logger(__name__)
@@ -42,6 +43,8 @@ app = FastAPI(title="ShadowPartner API")
 @app.on_event("startup")
 async def startup_event():
     """Initialize resources on startup."""
+    global task_manager
+    task_manager = TaskManager(logger)
     global executor
     executor = ThreadPoolExecutor(max_workers=4)
     logger.info("ThreadPoolExecutor initialized with 4 workers")
@@ -58,6 +61,9 @@ async def shutdown_event():
     """Cleanup resources on shutdown."""
     global executor
     global upload_session_sweeper_task
+    global task_manager
+    if task_manager:
+        await task_manager.shutdown(timeout=5.0)
     if executor:
         logger.info("Shutting down ThreadPoolExecutor")
         executor.shutdown(wait=True)
@@ -148,6 +154,7 @@ executor: Optional[ThreadPoolExecutor] = None
 whisper_lock: Optional[asyncio.Semaphore] = None
 whisper_lock_label = "transcription"
 upload_session_sweeper_task: Optional[asyncio.Task] = None
+task_manager: Optional[TaskManager] = None
 
 UPLOAD_DIR = "temp"
 UPLOAD_SESSION_TTL_SECONDS = settings.upload_session_ttl_seconds
@@ -548,6 +555,10 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
         
         update_task(task_id, TaskStatus.COMPLETED, 100, "Completed", result=final_response)
 
+    except asyncio.CancelledError:
+        logger.warning(f"Task {task_id} cancelled")
+        update_task(task_id, TaskStatus.FAILED, 0, "Processing cancelled", error="Processing cancelled")
+        raise
     except Exception as e:
         logger.error(f"Task {task_id} failed: {e}", exc_info=True)
         update_task(task_id, TaskStatus.FAILED, 0, "Processing failed", error=str(e))
@@ -588,7 +599,12 @@ async def process_video(request: VideoRequest, background_tasks: BackgroundTasks
         tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="Downloading video...")
         logger.info(f"Starting video processing task {task_id} for URL: {request.url}")
 
-        asyncio.create_task(download_and_process(task_id, request.url))
+        if task_manager is None:
+            raise RuntimeError("Task manager not initialized")
+        task_manager.create_task(
+            download_and_process(task_id, request.url),
+            name=f"download_and_process:{task_id}"
+        )
 
         return AsyncProcessResponse(task_id=task_id, message="Video processing started")
 
@@ -611,9 +627,20 @@ async def download_and_process(task_id: str, url: str):
         logger.info(f"Task {task_id}: Download completed in {download_time:.2f}s - {video_title}")
 
         await process_audio_task(task_id, temp_file, video_id, video_title, download_time=download_time)
+    except asyncio.CancelledError:
+        logger.warning(f"Task {task_id}: Download cancelled")
+        update_task(task_id, TaskStatus.FAILED, 0, "Download cancelled", error="Download cancelled")
+        raise
     except Exception as e:
         logger.error(f"Task {task_id}: Download failed - {e}", exc_info=True)
         update_task(task_id, TaskStatus.FAILED, 0, "Download failed", error=str(e))
+    finally:
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+                logger.debug(f"Cleaned up file: {temp_file}")
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup file {temp_file}: {cleanup_error}")
 
 
 @app.post("/api/upload/init", response_model=AsyncProcessResponse)
@@ -764,14 +791,19 @@ async def complete_upload(
         session.completed = True
         session.processing_started = True
 
-        asyncio.create_task(process_audio_task(
-            task_id,
-            session.temp_file,
-            video_id,  # Use hash-based video_id
-            filename,
-            download_time=0.0,
-            subtitle_path=subtitle_path
-        ))
+        if task_manager is None:
+            raise RuntimeError("Task manager not initialized")
+        task_manager.create_task(
+            process_audio_task(
+                task_id,
+                session.temp_file,
+                video_id,  # Use hash-based video_id
+                filename,
+                download_time=0.0,
+                subtitle_path=subtitle_path
+            ),
+            name=f"process_audio_task:{task_id}"
+        )
 
     return AsyncProcessResponse(task_id=task_id, message="Processing started")
 
@@ -829,14 +861,19 @@ async def upload_video(
             tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="File uploaded. Queued for processing...")
 
         logger.info(f"Starting processing task {task_id} for uploaded file")
-        asyncio.create_task(process_audio_task(
-            task_id,
-            temp_file,
-            video_id,  # Use hash-based video_id
-            file.filename,
-            download_time=0.0,
-            subtitle_path=subtitle_file
-        ))
+        if task_manager is None:
+            raise RuntimeError("Task manager not initialized")
+        task_manager.create_task(
+            process_audio_task(
+                task_id,
+                temp_file,
+                video_id,  # Use hash-based video_id
+                file.filename,
+                download_time=0.0,
+                subtitle_path=subtitle_file
+            ),
+            name=f"process_audio_task:{task_id}"
+        )
         
         return AsyncProcessResponse(task_id=task_id, message="File uploaded, processing started")
 
