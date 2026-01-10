@@ -134,6 +134,7 @@ tasks: Dict[str, TaskInfo] = {}
 executor: Optional[ThreadPoolExecutor] = None
 whisper_lock: Optional[asyncio.Semaphore] = None
 whisper_lock_label = "transcription"
+upload_locks: Dict[str, asyncio.Lock] = {}
 
 class VideoRequest(BaseModel):
     url: str
@@ -202,10 +203,33 @@ def update_task(task_id: str, status: TaskStatus, progress: int = 0, message: st
         if error:
             tasks[task_id].error = error
 
+def get_upload_lock(task_id: str) -> asyncio.Lock:
+    lock = upload_locks.get(task_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        upload_locks[task_id] = lock
+    return lock
+
+def release_upload_lock(task_id: str):
+    if task_id in upload_locks:
+        del upload_locks[task_id]
+
 async def run_cpu_bound(func, *args, **kwargs):
     """Run CPU-bound function in thread pool executor."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(executor, partial(func, *args, **kwargs))
+
+def _ensure_dir(path: str):
+    os.makedirs(path, exist_ok=True)
+
+def _touch_file(path: str):
+    with open(path, "wb"):
+        pass
+
+def _write_upload_file(path: str, upload_file: UploadFile, mode: str = "wb"):
+    upload_file.file.seek(0)
+    with open(path, mode) as buffer:
+        shutil.copyfileobj(upload_file.file, buffer)
 
 def check_subtitle_similarity(generated_segments: List[Dict], reference_segments: List[Dict], threshold: float = 0.1) -> List[str]:
     """
@@ -465,6 +489,7 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
                 logger.debug(f"Cleaned up subtitle: {subtitle_path}")
             except Exception as e:
                 logger.warning(f"Failed to cleanup subtitle {subtitle_path}: {e}")
+        release_upload_lock(task_id)
 
 
 @app.get("/api/status/{task_id}", response_model=TaskInfo)
@@ -518,16 +543,15 @@ async def download_and_process(task_id: str, url: str):
 async def init_upload(filename: str = Form(...)):
     task_id = str(uuid.uuid4())
     upload_dir = "temp"
-    if not os.path.exists(upload_dir):
-        os.makedirs(upload_dir)
+    await asyncio.to_thread(_ensure_dir, upload_dir)
 
     ext = os.path.splitext(filename)[1] or ".mp3"
     temp_file = os.path.join(upload_dir, f"{task_id}{ext}")
 
-    with open(temp_file, 'wb') as f:
-        pass
+    await asyncio.to_thread(_touch_file, temp_file)
 
     tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="Initialized upload...")
+    get_upload_lock(task_id)
     logger.info(f"Upload initialized: task_id={task_id}, filename={filename}")
 
     return AsyncProcessResponse(task_id=task_id, message="Upload initialized")
@@ -548,8 +572,9 @@ async def upload_chunk(
 
     temp_file = os.path.join(upload_dir, files[0])
 
-    with open(temp_file, "ab") as f:
-        shutil.copyfileobj(file.file, f)
+    lock = get_upload_lock(task_id)
+    async with lock:
+        await asyncio.to_thread(_write_upload_file, temp_file, file, "ab")
 
     tasks[task_id].message = f"Uploaded chunk {chunk_index + 1}"
     logger.debug(f"Task {task_id}: Uploaded chunk {chunk_index + 1}")
@@ -569,14 +594,15 @@ async def upload_subtitle(
     
     upload_dir = "temp"
     if not os.path.exists(upload_dir):
-        os.makedirs(upload_dir)
+        await asyncio.to_thread(_ensure_dir, upload_dir)
     
     # Save subtitle file with task_id prefix
     subtitle_ext = os.path.splitext(file.filename)[1] or ".srt"
     subtitle_path = os.path.join(upload_dir, f"{task_id}_subtitle{subtitle_ext}")
     
-    with open(subtitle_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    lock = get_upload_lock(task_id)
+    async with lock:
+        await asyncio.to_thread(_write_upload_file, subtitle_path, file, "wb")
 
     logger.info(f"Task {task_id}: Subtitle uploaded - {subtitle_path}")
     return {"status": "success", "path": subtitle_path}
@@ -607,21 +633,26 @@ async def complete_upload(
             subtitle_path = os.path.join(upload_dir, subtitle_files[0])
             logger.info(f"Task {task_id}: Found subtitle for completion - {subtitle_path}")
 
-    # Generate stable video_id based on file content hash
-    video_id = generate_video_id_from_file(temp_file)
-    logger.info(f"Task {task_id}: Generated video_id={video_id} for file={filename}")
+    lock = get_upload_lock(task_id)
+    try:
+        async with lock:
+            # Generate stable video_id based on file content hash
+            video_id = await asyncio.to_thread(generate_video_id_from_file, temp_file)
+            logger.info(f"Task {task_id}: Generated video_id={video_id} for file={filename}")
 
-    tasks[task_id].status = TaskStatus.PENDING
-    tasks[task_id].message = "Upload complete. Processing..."
+            tasks[task_id].status = TaskStatus.PENDING
+            tasks[task_id].message = "Upload complete. Processing..."
 
-    asyncio.create_task(process_audio_task(
-        task_id,
-        temp_file,
-        video_id,  # Use hash-based video_id
-        filename,
-        download_time=0.0,
-        subtitle_path=subtitle_path
-    ))
+            asyncio.create_task(process_audio_task(
+                task_id,
+                temp_file,
+                video_id,  # Use hash-based video_id
+                filename,
+                download_time=0.0,
+                subtitle_path=subtitle_path
+            ))
+    finally:
+        release_upload_lock(task_id)
 
     return AsyncProcessResponse(task_id=task_id, message="Processing started")
 
@@ -647,16 +678,14 @@ async def upload_video(
     try:
         # Save uploaded file immediately
         upload_dir = "temp"
-        if not os.path.exists(upload_dir):
-            os.makedirs(upload_dir)
+        await asyncio.to_thread(_ensure_dir, upload_dir)
             
         session_id = str(uuid.uuid4())
         # Use mp3 extension as we will process it as audio
         ext = os.path.splitext(file.filename)[1] or ".mp3"
         temp_file = os.path.join(upload_dir, f"{session_id}{ext}")
         
-        with open(temp_file, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        await asyncio.to_thread(_write_upload_file, temp_file, file, "wb")
 
         logger.info(f"File uploaded: {temp_file}")
         
@@ -665,13 +694,12 @@ async def upload_video(
             subtitle_ext = os.path.splitext(subtitle.filename)[1] or ".srt"
             subtitle_file = os.path.join(upload_dir, f"{session_id}_subtitle{subtitle_ext}")
             
-            with open(subtitle_file, "wb") as buffer:
-                shutil.copyfileobj(subtitle.file, buffer)
+            await asyncio.to_thread(_write_upload_file, subtitle_file, subtitle, "wb")
 
             logger.info(f"Subtitle uploaded: {subtitle_file}")
 
         # Generate stable video_id based on file content hash
-        video_id = generate_video_id_from_file(temp_file)
+        video_id = await asyncio.to_thread(generate_video_id_from_file, temp_file)
         logger.info(f"Generated video_id: {video_id} for file: {file.filename}")
 
         # Start async task
