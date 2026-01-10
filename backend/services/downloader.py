@@ -32,6 +32,11 @@ class VideoDownloader:
             'outtmpl': output_template,
             'quiet': False,
             'no_warnings': False,
+            'extractor_args': {
+                'youtube': {
+                    'remote_components': ['ejs:github']
+                }
+            }
         }
         
         if has_ffmpeg:

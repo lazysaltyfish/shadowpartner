@@ -125,6 +125,11 @@ createApp({
                  document.getElementById('youtube-player').innerHTML = '';
             }
 
+            const container = document.getElementById('youtube-player');
+            if (container) {
+                container.style.height = '';
+            }
+
             if (!window.YT) {
                 const tag = document.createElement('script');
                 tag.src = "https://www.youtube.com/iframe_api";

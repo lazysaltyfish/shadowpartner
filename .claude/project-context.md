@@ -201,6 +201,7 @@ Input (File + User SRT Subtitle)
 - **Subtitle Calibration**: Character-level timestamp interpolation for precise alignment
 - **Similarity Checking**: Validates user-provided subtitles against generated ones
 - **Video ID Hashing**: Uploaded files get hashed video IDs for uniqueness
+- **YouTube Player Sizing**: Frontend CSS enforces a 16:9 aspect ratio and iframe fill for `#youtube-player` to avoid collapsed embed height.
 
 ## Running the Application
 
