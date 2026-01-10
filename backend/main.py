@@ -158,6 +158,8 @@ class UploadSession:
     task_id: str
     temp_file: str
     next_index: int = 0
+    expected_total_chunks: Optional[int] = None
+    expected_total_size: Optional[int] = None
     subtitle_path: Optional[str] = None
     updated_at: float = field(default_factory=time.time)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -614,7 +616,11 @@ async def download_and_process(task_id: str, url: str):
 
 
 @app.post("/api/upload/init", response_model=AsyncProcessResponse)
-async def init_upload(filename: str = Form(...)):
+async def init_upload(
+    filename: str = Form(...),
+    total_chunks: int = Form(...),
+    total_size: int = Form(...)
+):
     task_id = str(uuid.uuid4())
     await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)
 
@@ -624,7 +630,12 @@ async def init_upload(filename: str = Form(...)):
     await asyncio.to_thread(_touch_file, temp_file)
 
     tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="Initialized upload...")
-    upload_sessions[task_id] = UploadSession(task_id=task_id, temp_file=temp_file)
+    upload_sessions[task_id] = UploadSession(
+        task_id=task_id,
+        temp_file=temp_file,
+        expected_total_chunks=total_chunks,
+        expected_total_size=total_size
+    )
     logger.info(f"Upload initialized: task_id={task_id}, filename={filename}")
 
     return AsyncProcessResponse(task_id=task_id, message="Upload initialized")
@@ -648,6 +659,8 @@ async def upload_chunk(
     async with session.lock:
         if session.completed:
             raise HTTPException(status_code=409, detail="Upload already completed")
+        if session.expected_total_chunks is not None and chunk_index >= session.expected_total_chunks:
+            raise HTTPException(status_code=409, detail="Chunk index exceeds declared total")
         if chunk_index < session.next_index:
             # Duplicate chunk upload; acknowledge to support retries.
             return {"status": "success"}
@@ -701,7 +714,9 @@ async def upload_subtitle(
 async def complete_upload(
     task_id: str = Form(...), 
     filename: str = Form(...),
-    subtitle_filename: Optional[str] = Form(None)
+    subtitle_filename: Optional[str] = Form(None),
+    total_chunks: int = Form(...),
+    total_size: int = Form(...)
 ):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -714,6 +729,19 @@ async def complete_upload(
             return AsyncProcessResponse(task_id=task_id, message="Processing already started")
         if not os.path.exists(session.temp_file):
             raise HTTPException(status_code=404, detail="File not found")
+
+        if session.expected_total_chunks != total_chunks:
+            raise HTTPException(status_code=400, detail="Total chunks mismatch")
+
+        if session.expected_total_size != total_size:
+            raise HTTPException(status_code=400, detail="Total size mismatch")
+
+        if session.next_index != session.expected_total_chunks:
+            raise HTTPException(status_code=409, detail="Upload incomplete")
+
+        actual_size = os.path.getsize(session.temp_file)
+        if actual_size != session.expected_total_size:
+            raise HTTPException(status_code=409, detail="Upload size mismatch")
 
         subtitle_path = session.subtitle_path
         if subtitle_filename and subtitle_path is None:

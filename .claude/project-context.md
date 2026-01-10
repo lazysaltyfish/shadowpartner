@@ -91,7 +91,7 @@ Input (File + User SRT Subtitle)
 
 ### Chunked Upload (for large files)
 - `POST /api/upload/init` - Initialize chunked upload session
-  - Input: `filename` (form data)
+  - Input: `filename`, `total_chunks`, `total_size` (form data, required)
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - Creates empty file and task entry
 
@@ -106,7 +106,7 @@ Input (File + User SRT Subtitle)
   - Saves subtitle file associated with the task
 
 - `POST /api/upload/complete` - Complete chunked upload and start processing
-  - Input: `task_id`, `filename`, `subtitle_filename` (optional)
+  - Input: `task_id`, `filename`, `subtitle_filename` (optional), `total_chunks`, `total_size` (required)
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - Triggers background processing with optional subtitle
 
@@ -202,7 +202,7 @@ Input (File + User SRT Subtitle)
 - **Whisper Queue**: GPU transcription is serialized with an in-process queue to avoid concurrent GPU tasks
 - **Download Offload**: YouTube downloads run in a background thread to avoid blocking the event loop
 - **Thread-Local MeCab**: Analyzer uses per-thread Tagger instances for safe concurrent NLP
-- **Upload I/O**: Upload writes and file hashing are offloaded to threads; chunked uploads track per-task session state to handle retries and reject out-of-order chunks; expired upload sessions are cleaned by a TTL sweeper
+- **Upload I/O**: Upload writes and file hashing are offloaded to threads; chunked uploads track per-task session state to handle retries, reject out-of-order chunks, and validate total chunks/size; expired upload sessions are cleaned by a TTL sweeper
 - **Frontend State**: Input/upload UI hides once `videoData` is available so the player/subtitle view is uncluttered
 - **Furigana Logic**: Katakana → Hiragana conversion, handles special cases
 - **Subtitle Calibration**: Character-level timestamp interpolation for precise alignment

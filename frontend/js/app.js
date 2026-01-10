@@ -365,6 +365,8 @@ createApp({
             // 1. Init
             const initFormData = new FormData();
             initFormData.append('filename', file.name);
+            initFormData.append('total_chunks', totalChunks);
+            initFormData.append('total_size', file.size);
             const initRes = await fetch(`${apiUrl}/upload/init`, {
                 method: 'POST',
                 body: initFormData,
@@ -427,6 +429,8 @@ createApp({
             const completeFormData = new FormData();
             completeFormData.append('task_id', task_id);
             completeFormData.append('filename', file.name);
+            completeFormData.append('total_chunks', totalChunks);
+            completeFormData.append('total_size', file.size);
             if (subtitleFile) {
                 completeFormData.append('subtitle_filename', subtitleFile.name);
             }
