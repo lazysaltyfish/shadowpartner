@@ -7,6 +7,7 @@ import time
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
 from typing import Any, Dict, List, Optional
@@ -134,7 +135,23 @@ tasks: Dict[str, TaskInfo] = {}
 executor: Optional[ThreadPoolExecutor] = None
 whisper_lock: Optional[asyncio.Semaphore] = None
 whisper_lock_label = "transcription"
-upload_locks: Dict[str, asyncio.Lock] = {}
+
+UPLOAD_DIR = "temp"
+
+
+@dataclass
+class UploadSession:
+    task_id: str
+    temp_file: str
+    next_index: int = 0
+    subtitle_path: Optional[str] = None
+    updated_at: float = field(default_factory=time.time)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    completed: bool = False
+    processing_started: bool = False
+
+
+upload_sessions: Dict[str, UploadSession] = {}
 
 class VideoRequest(BaseModel):
     url: str
@@ -203,16 +220,11 @@ def update_task(task_id: str, status: TaskStatus, progress: int = 0, message: st
         if error:
             tasks[task_id].error = error
 
-def get_upload_lock(task_id: str) -> asyncio.Lock:
-    lock = upload_locks.get(task_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        upload_locks[task_id] = lock
-    return lock
+def get_upload_session(task_id: str) -> Optional[UploadSession]:
+    return upload_sessions.get(task_id)
 
-def release_upload_lock(task_id: str):
-    if task_id in upload_locks:
-        del upload_locks[task_id]
+def release_upload_session(task_id: str):
+    upload_sessions.pop(task_id, None)
 
 async def run_cpu_bound(func, *args, **kwargs):
     """Run CPU-bound function in thread pool executor."""
@@ -489,7 +501,7 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
                 logger.debug(f"Cleaned up subtitle: {subtitle_path}")
             except Exception as e:
                 logger.warning(f"Failed to cleanup subtitle {subtitle_path}: {e}")
-        release_upload_lock(task_id)
+        release_upload_session(task_id)
 
 
 @app.get("/api/status/{task_id}", response_model=TaskInfo)
@@ -542,16 +554,15 @@ async def download_and_process(task_id: str, url: str):
 @app.post("/api/upload/init", response_model=AsyncProcessResponse)
 async def init_upload(filename: str = Form(...)):
     task_id = str(uuid.uuid4())
-    upload_dir = "temp"
-    await asyncio.to_thread(_ensure_dir, upload_dir)
+    await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)
 
     ext = os.path.splitext(filename)[1] or ".mp3"
-    temp_file = os.path.join(upload_dir, f"{task_id}{ext}")
+    temp_file = os.path.join(UPLOAD_DIR, f"{task_id}{ext}")
 
     await asyncio.to_thread(_touch_file, temp_file)
 
     tasks[task_id] = TaskInfo(task_id=task_id, status=TaskStatus.PENDING, message="Initialized upload...")
-    get_upload_lock(task_id)
+    upload_sessions[task_id] = UploadSession(task_id=task_id, temp_file=temp_file)
     logger.info(f"Upload initialized: task_id={task_id}, filename={filename}")
 
     return AsyncProcessResponse(task_id=task_id, message="Upload initialized")
@@ -565,16 +576,28 @@ async def upload_chunk(
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    upload_dir = "temp"
-    files = [f for f in os.listdir(upload_dir) if f.startswith(task_id) and "_subtitle" not in f]
-    if not files:
+    session = get_upload_session(task_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Upload session not found")
 
-    temp_file = os.path.join(upload_dir, files[0])
+    if chunk_index < 0:
+        raise HTTPException(status_code=400, detail="Invalid chunk index")
 
-    lock = get_upload_lock(task_id)
-    async with lock:
-        await asyncio.to_thread(_write_upload_file, temp_file, file, "ab")
+    async with session.lock:
+        if session.completed:
+            raise HTTPException(status_code=409, detail="Upload already completed")
+        if chunk_index < session.next_index:
+            # Duplicate chunk upload; acknowledge to support retries.
+            return {"status": "success"}
+        if chunk_index > session.next_index:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Out-of-order chunk. Expected {session.next_index}, got {chunk_index}."
+            )
+
+        await asyncio.to_thread(_write_upload_file, session.temp_file, file, "ab")
+        session.next_index += 1
+        session.updated_at = time.time()
 
     tasks[task_id].message = f"Uploaded chunk {chunk_index + 1}"
     logger.debug(f"Task {task_id}: Uploaded chunk {chunk_index + 1}")
@@ -592,17 +615,22 @@ async def upload_subtitle(
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    upload_dir = "temp"
-    if not os.path.exists(upload_dir):
-        await asyncio.to_thread(_ensure_dir, upload_dir)
+    session = get_upload_session(task_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    if not os.path.exists(UPLOAD_DIR):
+        await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)
     
     # Save subtitle file with task_id prefix
     subtitle_ext = os.path.splitext(file.filename)[1] or ".srt"
-    subtitle_path = os.path.join(upload_dir, f"{task_id}_subtitle{subtitle_ext}")
+    subtitle_path = os.path.join(UPLOAD_DIR, f"{task_id}_subtitle{subtitle_ext}")
     
-    lock = get_upload_lock(task_id)
-    async with lock:
+    async with session.lock:
+        if session.completed:
+            raise HTTPException(status_code=409, detail="Upload already completed")
         await asyncio.to_thread(_write_upload_file, subtitle_path, file, "wb")
+        session.subtitle_path = subtitle_path
+        session.updated_at = time.time()
 
     logger.info(f"Task {task_id}: Subtitle uploaded - {subtitle_path}")
     return {"status": "success", "path": subtitle_path}
@@ -615,44 +643,44 @@ async def complete_upload(
 ):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
-    
-    upload_dir = "temp"
-    # Exclude subtitle files so we don't accidentally select the subtitle as the video source
-    files = [f for f in os.listdir(upload_dir) if f.startswith(task_id) and "_subtitle" not in f]
-    if not files:
-        raise HTTPException(status_code=404, detail="File not found")
-    
-    temp_file = os.path.join(upload_dir, files[0])
-    
-    # Check for subtitle file
-    subtitle_path = None
-    if subtitle_filename:
-        # Look for the corresponding subtitle part file, which we assume was uploaded with the same task_id
-        subtitle_files = [f for f in os.listdir(upload_dir) if f.startswith(f"{task_id}_subtitle")]
-        if subtitle_files:
-            subtitle_path = os.path.join(upload_dir, subtitle_files[0])
-            logger.info(f"Task {task_id}: Found subtitle for completion - {subtitle_path}")
+    session = get_upload_session(task_id)
+    if session is None:
+        return AsyncProcessResponse(task_id=task_id, message="Processing already started")
 
-    lock = get_upload_lock(task_id)
-    try:
-        async with lock:
-            # Generate stable video_id based on file content hash
-            video_id = await asyncio.to_thread(generate_video_id_from_file, temp_file)
-            logger.info(f"Task {task_id}: Generated video_id={video_id} for file={filename}")
+    async with session.lock:
+        if session.completed:
+            return AsyncProcessResponse(task_id=task_id, message="Processing already started")
+        if not os.path.exists(session.temp_file):
+            raise HTTPException(status_code=404, detail="File not found")
 
-            tasks[task_id].status = TaskStatus.PENDING
-            tasks[task_id].message = "Upload complete. Processing..."
+        subtitle_path = session.subtitle_path
+        if subtitle_filename and subtitle_path is None:
+            subtitle_files = [
+                f for f in os.listdir(UPLOAD_DIR)
+                if f.startswith(f"{task_id}_subtitle")
+            ]
+            if subtitle_files:
+                subtitle_path = os.path.join(UPLOAD_DIR, subtitle_files[0])
+                logger.info(f"Task {task_id}: Found subtitle for completion - {subtitle_path}")
 
-            asyncio.create_task(process_audio_task(
-                task_id,
-                temp_file,
-                video_id,  # Use hash-based video_id
-                filename,
-                download_time=0.0,
-                subtitle_path=subtitle_path
-            ))
-    finally:
-        release_upload_lock(task_id)
+        # Generate stable video_id based on file content hash
+        video_id = await asyncio.to_thread(generate_video_id_from_file, session.temp_file)
+        logger.info(f"Task {task_id}: Generated video_id={video_id} for file={filename}")
+
+        tasks[task_id].status = TaskStatus.PENDING
+        tasks[task_id].message = "Upload complete. Processing..."
+
+        session.completed = True
+        session.processing_started = True
+
+        asyncio.create_task(process_audio_task(
+            task_id,
+            session.temp_file,
+            video_id,  # Use hash-based video_id
+            filename,
+            download_time=0.0,
+            subtitle_path=subtitle_path
+        ))
 
     return AsyncProcessResponse(task_id=task_id, message="Processing started")
 
@@ -677,13 +705,12 @@ async def upload_video(
     subtitle_file = None
     try:
         # Save uploaded file immediately
-        upload_dir = "temp"
-        await asyncio.to_thread(_ensure_dir, upload_dir)
+        await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)
             
         session_id = str(uuid.uuid4())
         # Use mp3 extension as we will process it as audio
         ext = os.path.splitext(file.filename)[1] or ".mp3"
-        temp_file = os.path.join(upload_dir, f"{session_id}{ext}")
+        temp_file = os.path.join(UPLOAD_DIR, f"{session_id}{ext}")
         
         await asyncio.to_thread(_write_upload_file, temp_file, file, "wb")
 
@@ -692,7 +719,7 @@ async def upload_video(
         # Save subtitle file if provided
         if subtitle and subtitle.filename:
             subtitle_ext = os.path.splitext(subtitle.filename)[1] or ".srt"
-            subtitle_file = os.path.join(upload_dir, f"{session_id}_subtitle{subtitle_ext}")
+            subtitle_file = os.path.join(UPLOAD_DIR, f"{session_id}_subtitle{subtitle_ext}")
             
             await asyncio.to_thread(_write_upload_file, subtitle_file, subtitle, "wb")
 
