@@ -132,6 +132,8 @@ tasks: Dict[str, TaskInfo] = {}
 
 # Global thread pool executor for CPU-bound tasks
 executor: Optional[ThreadPoolExecutor] = None
+whisper_lock: Optional[asyncio.Semaphore] = None
+whisper_lock_label = "transcription"
 
 class VideoRequest(BaseModel):
     url: str
@@ -181,6 +183,11 @@ try:
     aligner = Aligner()
     translator = Translator()
     subtitle_linearizer = SubtitleLinearizer()
+    is_accelerated = transcriber.device.lower() != "cpu"
+    if is_accelerated:
+        whisper_lock = asyncio.Semaphore(1)
+        whisper_lock_label = "GPU transcription"
+        logger.info("Whisper transcription queue enabled (1 at a time)")
     logger.info(f"All services initialized successfully. Transcriber running on {transcriber.device} (fp16={transcriber.fp16}, model={transcriber.model_size})")
 except Exception as e:
     logger.critical(f"Failed to initialize services: {e}", exc_info=True)
@@ -278,13 +285,24 @@ async def process_audio_task(task_id: str, file_path: str, video_id: str, title:
     
     try:
         # 2. Transcribe (Always run AI for timing reference)
-        update_task(task_id, TaskStatus.PROCESSING, 10, "Transcribing audio (Generating Timing Reference)...")
-        logger.info(f"Task {task_id}: Starting transcription for timing reference")
-        t0 = time.time()
-        gen_result = await run_cpu_bound(transcriber.transcribe, file_path, language="ja")
-        generated_segments = gen_result['segments']
-        transcribe_time = time.time() - t0
-        logger.info(f"Task {task_id}: Transcription completed in {transcribe_time:.2f}s")
+        if whisper_lock:
+            update_task(task_id, TaskStatus.PROCESSING, 5, f"Waiting for {whisper_lock_label} slot...")
+            async with whisper_lock:
+                update_task(task_id, TaskStatus.PROCESSING, 10, "Transcribing audio (Generating Timing Reference)...")
+                logger.info(f"Task {task_id}: Starting transcription for timing reference")
+                t0 = time.time()
+                gen_result = await run_cpu_bound(transcriber.transcribe, file_path, language="ja")
+                generated_segments = gen_result['segments']
+                transcribe_time = time.time() - t0
+                logger.info(f"Task {task_id}: Transcription completed in {transcribe_time:.2f}s")
+        else:
+            update_task(task_id, TaskStatus.PROCESSING, 10, "Transcribing audio (Generating Timing Reference)...")
+            logger.info(f"Task {task_id}: Starting transcription for timing reference")
+            t0 = time.time()
+            gen_result = await run_cpu_bound(transcriber.transcribe, file_path, language="ja")
+            generated_segments = gen_result['segments']
+            transcribe_time = time.time() - t0
+            logger.info(f"Task {task_id}: Transcription completed in {transcribe_time:.2f}s")
         
         reference_segments = []
 
@@ -483,7 +501,7 @@ async def download_and_process(task_id: str, url: str):
         logger.info(f"Task {task_id}: Downloading from URL: {url}")
 
         t0 = time.time()
-        temp_file, info = downloader.download_audio(url)
+        temp_file, info = await asyncio.to_thread(downloader.download_audio, url)
         download_time = time.time() - t0
 
         video_title = info.get('title', 'Unknown Video')

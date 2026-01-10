@@ -1,3 +1,5 @@
+import threading
+
 import MeCab
 
 from utils.logger import get_logger
@@ -8,22 +10,31 @@ logger = get_logger(__name__)
 
 class JapaneseAnalyzer:
     def __init__(self):
+        self._local = threading.local()
+        self._tagger_args = None
         try:
-            self.tagger = MeCab.Tagger()
+            self._local.tagger = MeCab.Tagger()
             logger.info("MeCab initialized successfully")
         except RuntimeError as e:
             logger.warning(f"MeCab default init failed, trying fallback: {e}")
-            self.tagger = MeCab.Tagger("-r /dev/null")
+            self._tagger_args = "-r /dev/null"
+            self._local.tagger = MeCab.Tagger(self._tagger_args)
             logger.info("MeCab initialized with fallback configuration")
+
+    def _get_tagger(self):
+        tagger = getattr(self._local, "tagger", None)
+        if tagger is None:
+            tagger = MeCab.Tagger(self._tagger_args) if self._tagger_args else MeCab.Tagger()
+            self._local.tagger = tagger
+        return tagger
 
     def analyze(self, text: str):
         """
         Analyzes Japanese text and returns list of dicts: {'text': surface, 'reading': hiragana}.
         """
-        # MeCab isn't thread safe in older versions, but Tagger object should be fine if local or careful.
-        # For this simple app, it's okay.
-        
-        node = self.tagger.parseToNode(text)
+        # Use a thread-local Tagger for safe concurrent analysis.
+        tagger = self._get_tagger()
+        node = tagger.parseToNode(text)
         result = []
         
         while node:

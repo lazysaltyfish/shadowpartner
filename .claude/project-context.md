@@ -197,6 +197,9 @@ Input (File + User SRT Subtitle)
 ## Important Implementation Details
 - **Stateless Architecture**: No database, in-memory task storage only
 - **Async Processing**: Long-running tasks use background processing with task IDs
+- **Whisper Queue**: GPU transcription is serialized with an in-process queue to avoid concurrent GPU tasks
+- **Download Offload**: YouTube downloads run in a background thread to avoid blocking the event loop
+- **Thread-Local MeCab**: Analyzer uses per-thread Tagger instances for safe concurrent NLP
 - **Furigana Logic**: Katakana → Hiragana conversion, handles special cases
 - **Subtitle Calibration**: Character-level timestamp interpolation for precise alignment
 - **Similarity Checking**: Validates user-provided subtitles against generated ones
@@ -224,4 +227,3 @@ python -m http.server 3000
 ```
 
 Access at: http://localhost:3000
-
