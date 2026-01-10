@@ -201,6 +201,7 @@ Input (File + User SRT Subtitle)
 - **Stateless Architecture**: No database, in-memory task storage only
 - **Async Processing**: Long-running tasks use background processing with task IDs
 - **Settings**: Environment settings are centralized in `settings.py` and loaded once via `get_settings()`
+- **Thread Pool**: A single shared `ThreadPoolExecutor` is used for CPU-bound tasks and translation batching
 - **Whisper Queue**: GPU transcription is serialized with an in-process queue to avoid concurrent GPU tasks
 - **Download Offload**: YouTube downloads run in a background thread to avoid blocking the event loop
 - **Thread-Local MeCab**: Analyzer uses per-thread Tagger instances for safe concurrent NLP

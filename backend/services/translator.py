@@ -1,6 +1,6 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import List
+from typing import List, Optional
 
 from google import genai
 
@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 
 
 class Translator:
-    def __init__(self):
+    def __init__(self, executor: Optional[ThreadPoolExecutor] = None):
         # Read API key at initialization time (settings loads .env once)
         settings = get_settings()
         api_key = settings.gemini_api_key
@@ -23,13 +23,11 @@ class Translator:
         self.available = bool(api_key)
         self.model_id = settings.gemini_model_id
         self.chunk_size = settings.translate_batch_chunk_size
-        self.executor = ThreadPoolExecutor(max_workers=4)
+        self.executor = executor
         logger.info(f"Translator initialized with model: {self.model_id}, chunk size: {self.chunk_size}")
 
-    def __del__(self):
-        """Cleanup executor on deletion."""
-        if hasattr(self, 'executor') and self.executor:
-            self.executor.shutdown(wait=False)
+    def set_executor(self, executor: Optional[ThreadPoolExecutor]) -> None:
+        self.executor = executor
 
     def translate(self, text: str, target_lang: str = "Chinese") -> str:
         if not self.available:

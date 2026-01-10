@@ -45,6 +45,9 @@ async def startup_event():
     global executor
     executor = ThreadPoolExecutor(max_workers=4)
     logger.info("ThreadPoolExecutor initialized with 4 workers")
+    translator_instance = globals().get("translator")
+    if translator_instance:
+        translator_instance.set_executor(executor)
     global upload_session_sweeper_task
     upload_session_sweeper_task = asyncio.create_task(sweep_upload_sessions())
     logger.info("Upload session sweeper started")
