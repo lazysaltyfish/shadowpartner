@@ -1,10 +1,10 @@
 import asyncio
-import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
 from google import genai
 
+from settings import get_settings
 from utils.logger import get_logger
 
 # Setup logger
@@ -13,15 +13,16 @@ logger = get_logger(__name__)
 
 class Translator:
     def __init__(self):
-        # Read API key at initialization time (after load_dotenv() in main.py)
-        api_key = os.environ.get("GEMINI_API_KEY")
+        # Read API key at initialization time (settings loads .env once)
+        settings = get_settings()
+        api_key = settings.gemini_api_key
 
         self.client = None
         if api_key:
             self.client = genai.Client(api_key=api_key)
         self.available = bool(api_key)
-        self.model_id = os.environ.get("GEMINI_MODEL_ID", "gemini-3-flash-preview")
-        self.chunk_size = int(os.environ.get("TRANSLATE_BATCH_CHUNK_SIZE", 50))
+        self.model_id = settings.gemini_model_id
+        self.chunk_size = settings.translate_batch_chunk_size
         self.executor = ThreadPoolExecutor(max_workers=4)
         logger.info(f"Translator initialized with model: {self.model_id}, chunk size: {self.chunk_size}")
 

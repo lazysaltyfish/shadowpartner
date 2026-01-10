@@ -13,10 +13,10 @@ from functools import partial
 from typing import Any, Dict, List, Optional
 
 import fastapi
-from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from settings import get_settings
 from services.aligner import Aligner
 from services.analyzer import JapaneseAnalyzer
 from services.downloader import VideoDownloader
@@ -27,11 +27,9 @@ from services.video_utils import generate_video_id_from_file
 from utils.logger import get_logger
 from utils.path_setup import setup_local_bin_path
 
-# Load environment variables from .env file
-load_dotenv()
-
 # Setup logger
 logger = get_logger(__name__)
+settings = get_settings()
 
 # Setup local bin path
 local_bin = setup_local_bin_path()
@@ -149,8 +147,8 @@ whisper_lock_label = "transcription"
 upload_session_sweeper_task: Optional[asyncio.Task] = None
 
 UPLOAD_DIR = "temp"
-UPLOAD_SESSION_TTL_SECONDS = int(os.getenv("UPLOAD_SESSION_TTL_SECONDS", "600"))
-UPLOAD_SESSION_SWEEP_SECONDS = int(os.getenv("UPLOAD_SESSION_SWEEP_SECONDS", "60"))
+UPLOAD_SESSION_TTL_SECONDS = settings.upload_session_ttl_seconds
+UPLOAD_SESSION_SWEEP_SECONDS = settings.upload_session_sweep_seconds
 
 
 @dataclass
@@ -205,10 +203,10 @@ class AsyncProcessResponse(BaseModel):
 
 # Initialize Services
 try:
-    whisper_device = os.getenv("WHISPER_DEVICE", None)
-    whisper_fp16 = os.getenv("WHISPER_FP16", "False").lower() == "true"
-    whisper_model_size = os.getenv("WHISPER_MODEL_SIZE", "base")
-    subtitle_similarity_threshold = float(os.getenv("SUBTITLE_SIMILARITY_THRESHOLD", "0.1"))
+    whisper_device = settings.whisper_device
+    whisper_fp16 = settings.whisper_fp16
+    whisper_model_size = settings.whisper_model_size
+    subtitle_similarity_threshold = settings.subtitle_similarity_threshold
 
     logger.info("Initializing services...")
     downloader = VideoDownloader()

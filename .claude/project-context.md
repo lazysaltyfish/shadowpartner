@@ -30,6 +30,7 @@
 ### Backend Structure (`/backend`)
 ```
 main.py (696 lines)           # FastAPI app with endpoints
+settings.py                   # Centralized environment settings loader
 services/
   ├── downloader.py           # YouTube/file download
   ├── transcriber.py          # Whisper transcription
@@ -199,6 +200,7 @@ Input (File + User SRT Subtitle)
 ## Important Implementation Details
 - **Stateless Architecture**: No database, in-memory task storage only
 - **Async Processing**: Long-running tasks use background processing with task IDs
+- **Settings**: Environment settings are centralized in `settings.py` and loaded once via `get_settings()`
 - **Whisper Queue**: GPU transcription is serialized with an in-process queue to avoid concurrent GPU tasks
 - **Download Offload**: YouTube downloads run in a background thread to avoid blocking the event loop
 - **Thread-Local MeCab**: Analyzer uses per-thread Tagger instances for safe concurrent NLP

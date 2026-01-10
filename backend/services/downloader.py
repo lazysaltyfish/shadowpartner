@@ -4,6 +4,7 @@ import uuid
 
 import yt_dlp
 
+from settings import get_settings
 from utils.logger import get_logger
 from utils.path_setup import setup_local_bin_path
 
@@ -16,6 +17,7 @@ setup_local_bin_path()
 class VideoDownloader:
     def __init__(self, download_dir="temp"):
         self.download_dir = download_dir
+        self.settings = get_settings()
         if not os.path.exists(download_dir):
             os.makedirs(download_dir)
 
@@ -48,9 +50,8 @@ class VideoDownloader:
         
         try:
             # Check for proxy environment variable
-            proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
-            if proxy:
-                ydl_opts['proxy'] = proxy
+            if self.settings.proxy:
+                ydl_opts['proxy'] = self.settings.proxy
 
             # Only use cookies if the file exists
             if os.path.exists('cookies.txt'):
