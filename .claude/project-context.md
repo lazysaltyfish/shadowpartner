@@ -201,6 +201,7 @@ Input (File + User SRT Subtitle)
 - **Download Offload**: YouTube downloads run in a background thread to avoid blocking the event loop
 - **Thread-Local MeCab**: Analyzer uses per-thread Tagger instances for safe concurrent NLP
 - **Upload I/O**: Upload writes and file hashing are offloaded to threads; chunked uploads use per-task locks to avoid overlapping writes
+- **Frontend State**: Input/upload UI hides once `videoData` is available so the player/subtitle view is uncluttered
 - **Furigana Logic**: Katakana → Hiragana conversion, handles special cases
 - **Subtitle Calibration**: Character-level timestamp interpolation for precise alignment
 - **Similarity Checking**: Validates user-provided subtitles against generated ones
