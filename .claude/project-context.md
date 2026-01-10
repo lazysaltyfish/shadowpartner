@@ -184,6 +184,8 @@ Input (File + User SRT Subtitle)
 - `TRANSLATE_BATCH_CHUNK_SIZE` - Translation batch size (default: 50)
 - `SUBTITLE_SIMILARITY_THRESHOLD` - Similarity warning threshold (0.0-1.0, default: 0.1)
 - `HTTP_PROXY` / `HTTPS_PROXY` - Optional proxy settings for YouTube downloads
+- `UPLOAD_SESSION_TTL_SECONDS` - Chunked upload session TTL (default: 600)
+- `UPLOAD_SESSION_SWEEP_SECONDS` - Sweep interval for expiring uploads (default: 60)
 
 ## Key Features
 1. **Video Input**: YouTube URL or local file upload (drag-and-drop supported)
@@ -200,7 +202,7 @@ Input (File + User SRT Subtitle)
 - **Whisper Queue**: GPU transcription is serialized with an in-process queue to avoid concurrent GPU tasks
 - **Download Offload**: YouTube downloads run in a background thread to avoid blocking the event loop
 - **Thread-Local MeCab**: Analyzer uses per-thread Tagger instances for safe concurrent NLP
-- **Upload I/O**: Upload writes and file hashing are offloaded to threads; chunked uploads track per-task session state to handle retries and reject out-of-order chunks
+- **Upload I/O**: Upload writes and file hashing are offloaded to threads; chunked uploads track per-task session state to handle retries and reject out-of-order chunks; expired upload sessions are cleaned by a TTL sweeper
 - **Frontend State**: Input/upload UI hides once `videoData` is available so the player/subtitle view is uncluttered
 - **Furigana Logic**: Katakana → Hiragana conversion, handles special cases
 - **Subtitle Calibration**: Character-level timestamp interpolation for precise alignment

@@ -47,16 +47,27 @@ async def startup_event():
     global executor
     executor = ThreadPoolExecutor(max_workers=4)
     logger.info("ThreadPoolExecutor initialized with 4 workers")
+    global upload_session_sweeper_task
+    upload_session_sweeper_task = asyncio.create_task(sweep_upload_sessions())
+    logger.info("Upload session sweeper started")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup resources on shutdown."""
     global executor
+    global upload_session_sweeper_task
     if executor:
         logger.info("Shutting down ThreadPoolExecutor")
         executor.shutdown(wait=True)
         logger.info("ThreadPoolExecutor shutdown complete")
+    if upload_session_sweeper_task:
+        upload_session_sweeper_task.cancel()
+        try:
+            await upload_session_sweeper_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Upload session sweeper stopped")
 
 
 @app.middleware("http")
@@ -135,8 +146,11 @@ tasks: Dict[str, TaskInfo] = {}
 executor: Optional[ThreadPoolExecutor] = None
 whisper_lock: Optional[asyncio.Semaphore] = None
 whisper_lock_label = "transcription"
+upload_session_sweeper_task: Optional[asyncio.Task] = None
 
 UPLOAD_DIR = "temp"
+UPLOAD_SESSION_TTL_SECONDS = int(os.getenv("UPLOAD_SESSION_TTL_SECONDS", "600"))
+UPLOAD_SESSION_SWEEP_SECONDS = int(os.getenv("UPLOAD_SESSION_SWEEP_SECONDS", "60"))
 
 
 @dataclass
@@ -225,6 +239,54 @@ def get_upload_session(task_id: str) -> Optional[UploadSession]:
 
 def release_upload_session(task_id: str):
     upload_sessions.pop(task_id, None)
+
+async def _safe_remove_file(path: Optional[str], label: str):
+    if not path:
+        return
+    if os.path.exists(path):
+        try:
+            await asyncio.to_thread(os.remove, path)
+            logger.info(f"Removed expired upload {label}: {path}")
+        except Exception as e:
+            logger.warning(f"Failed to remove expired upload {label} {path}: {e}")
+
+async def cleanup_expired_upload_sessions():
+    if not upload_sessions:
+        return
+
+    now = time.time()
+    expired_ids = [
+        task_id
+        for task_id, session in list(upload_sessions.items())
+        if not session.completed and (now - session.updated_at) > UPLOAD_SESSION_TTL_SECONDS
+    ]
+
+    for task_id in expired_ids:
+        session = upload_sessions.get(task_id)
+        if session is None:
+            continue
+        async with session.lock:
+            if session.completed:
+                continue
+            if (time.time() - session.updated_at) <= UPLOAD_SESSION_TTL_SECONDS:
+                continue
+
+            logger.info(f"Upload session expired: {task_id}")
+            update_task(
+                task_id,
+                TaskStatus.FAILED,
+                0,
+                "Upload expired",
+                error="Upload expired (TTL exceeded)."
+            )
+            await _safe_remove_file(session.temp_file, "file")
+            await _safe_remove_file(session.subtitle_path, "subtitle")
+            release_upload_session(task_id)
+
+async def sweep_upload_sessions():
+    while True:
+        await asyncio.sleep(UPLOAD_SESSION_SWEEP_SECONDS)
+        await cleanup_expired_upload_sessions()
 
 async def run_cpu_bound(func, *args, **kwargs):
     """Run CPU-bound function in thread pool executor."""
