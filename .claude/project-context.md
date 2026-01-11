@@ -21,9 +21,10 @@
 - **Line Length**: Maximum line length is set to **100** characters (configured in `backend/pyproject.toml`).
 - **Imports**: `isort` rules are enabled via Ruff for automatic import sorting.
 - **Strict Requirement**: AI assistants MUST ensure all code changes comply with these formatting rules.
-- **Verification**: Before proposing or making a commit, you MUST run the following command in the `backend` directory to verify and fix formatting:
+- **Verification**: After making changes and before proposing a commit, you MUST run Ruff to verify and fix formatting. Focus ONLY on the files you modified to ensure the check is fast and relevant to your changes:
   ```bash
-  cd backend && uv run ruff check --fix . && uv run ruff format .
+  # Check and format only uncommitted changes
+  cd backend && git diff --name-only --diff-filter=d | grep '\.py$' | xargs -r uv run ruff check --fix && git diff --name-only --diff-filter=d | grep '\.py$' | xargs -r uv run ruff format
   ```
 
 ### Git & Commit Standards
