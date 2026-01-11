@@ -1,0 +1,22 @@
+{
+  "include": [
+    "."
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".venv"
+  ],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportOptionalMemberAccess": "warning",
+  "reportOptionalSubscript": "warning",
+  "reportOptionalIterable": "warning",
+  "reportOptionalCall": "warning",
+  "reportArgumentType": "warning",
+  "reportAssignmentType": "warning",
+  "reportReturnType": "warning"
+}

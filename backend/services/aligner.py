@@ -1,6 +1,6 @@
 import difflib
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 from utils.logger import get_logger
 
@@ -17,9 +17,9 @@ class Aligner:
     def calibrate_from_merged(
         self,
         merged_text: str,
-        char_metadata: List[Dict],
-        generated_segments: List[Dict]
-    ) -> Tuple[str, List[Dict]]:
+        char_metadata: List[Dict[str, Any]],
+        generated_segments: List[Dict[str, Any]]
+    ) -> Tuple[str, List[Dict[str, Any]]]:
         """
         Calibrate timestamps for deduplicated reference text using AI-generated timestamps.
 
@@ -50,7 +50,7 @@ class Aligner:
         ai_normalized, ai_mapping = self._normalize_text(ai_text)
 
         # 3. Align using SequenceMatcher
-        char_timestamps = [None] * len(merged_text)
+        char_timestamps: List[Optional[Dict[str, Any]]] = [None] * len(merged_text)
         matcher = difflib.SequenceMatcher(None, ref_normalized, ai_normalized)
 
         for tag, i1, i2, j1, j2 in matcher.get_opcodes():
@@ -85,9 +85,10 @@ class Aligner:
         # 4. Interpolate gaps
         self._interpolate_timestamps(char_timestamps, char_metadata)
 
-        return merged_text, char_timestamps
+        # Cast back to non-optional because interpolation filled all gaps
+        return merged_text, [ts for ts in char_timestamps if ts is not None]
 
-    def _flatten_ai_segments(self, segments: List[Dict]) -> List[Dict]:
+    def _flatten_ai_segments(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Flatten AI segments to character-level timestamps."""
         chars = []
 
@@ -150,8 +151,8 @@ class Aligner:
     def _distribute_time_evenly(
         self,
         text: str,
-        char_metadata: List[Dict]
-    ) -> List[Dict]:
+        char_metadata: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         """Distribute time evenly when no AI timestamps available."""
         if not text or not char_metadata:
             return []
@@ -161,7 +162,7 @@ class Aligner:
         for i, meta in enumerate(char_metadata):
             seg_chars[meta['seg_idx']].append((i, meta))
 
-        result = [None] * len(text)
+        result: List[Optional[Dict[str, Any]]] = [None] * len(text)
 
         for seg_idx in sorted(seg_chars.keys()):
             chars = seg_chars[seg_idx]
@@ -179,12 +180,12 @@ class Aligner:
                     'end': seg_start + (j + 1) * char_dur
                 }
 
-        return result
+        return [r for r in result if r is not None]
 
     def _interpolate_timestamps(
         self,
-        timestamps: List[Optional[Dict]],
-        char_metadata: List[Dict]
+        timestamps: List[Optional[Dict[str, Any]]],
+        char_metadata: List[Dict[str, Any]]
     ):
         """
         Fill gaps in timestamps using smart interpolation.
@@ -216,13 +217,17 @@ class Aligner:
 
             # Find previous valid timestamp
             prev_time = None
-            if gap_start > 0 and timestamps[gap_start - 1] is not None:
-                prev_time = timestamps[gap_start - 1]['end']
+            if gap_start > 0:
+                prev_entry = timestamps[gap_start - 1]
+                if prev_entry is not None:
+                    prev_time = prev_entry['end']
 
             # Find next valid timestamp
             next_time = None
-            if gap_end < n and timestamps[gap_end] is not None:
-                next_time = timestamps[gap_end]['start']
+            if gap_end < n:
+                next_entry = timestamps[gap_end]
+                if next_entry is not None:
+                    next_time = next_entry['start']
 
             # Determine interpolation bounds
             if prev_time is None and next_time is None:
@@ -234,12 +239,19 @@ class Aligner:
             elif prev_time is None:
                 # No previous timestamp, use segment start as lower bound
                 seg_start = char_metadata[gap_start]['seg_start']
-                prev_time = max(seg_start, next_time - gap_length * 0.1)
+                if next_time is not None:
+                    prev_time = max(seg_start, next_time - gap_length * 0.1)
+                else:
+                    prev_time = seg_start
             elif next_time is None:
                 # No next timestamp (gap at end of text)
                 # Use the last segment's end time as upper bound
                 seg_end = char_metadata[gap_end - 1]['seg_end']
                 next_time = seg_end
+
+            # Safety check for type checker
+            if prev_time is None: prev_time = 0.0
+            if next_time is None: next_time = 0.0
 
             # Ensure prev_time <= next_time
             if prev_time > next_time:
@@ -262,9 +274,9 @@ class Aligner:
     def rebuild_segments_with_timestamps(
         self,
         merged_text: str,
-        char_metadata: List[Dict],
-        char_timestamps: List[Dict]
-    ) -> List[Dict]:
+        char_metadata: List[Dict[str, Any]],
+        char_timestamps: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         """
         Rebuild segment structure from calibrated character data.
 
@@ -313,9 +325,9 @@ class Aligner:
     # Legacy method for backward compatibility
     def calibrate(
         self,
-        reference_segments: List[Dict],
-        generated_segments: List[Dict]
-    ) -> List[Dict]:
+        reference_segments: List[Dict[str, Any]],
+        generated_segments: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         """
         Legacy calibration method.
         Flattens reference segments and calibrates against AI segments.
@@ -363,11 +375,11 @@ class Aligner:
 
     def align(
         self,
-        whisper_words: List[Dict],
-        mecab_tokens: List[Dict],
-        segment_start: float = None,
-        segment_end: float = None
-    ) -> List[Dict]:
+        whisper_words: List[Dict[str, Any]],
+        mecab_tokens: List[Dict[str, Any]],
+        segment_start: Optional[float] = None,
+        segment_end: Optional[float] = None
+    ) -> List[Dict[str, Any]]:
         """
         Aligns timestamps from whisper words (or calibrated characters) to mecab tokens.
 
@@ -453,10 +465,10 @@ class Aligner:
 
     def _align_without_timestamps(
         self,
-        mecab_tokens: List[Dict],
-        segment_start: float,
-        segment_end: float
-    ) -> List[Dict]:
+        mecab_tokens: List[Dict[str, Any]],
+        segment_start: Optional[float],
+        segment_end: Optional[float]
+    ) -> List[Dict[str, Any]]:
         """Distribute time evenly when no timestamps available."""
         if segment_start is not None and segment_end is not None:
             total_chars = sum(len(t.get('text', '')) for t in mecab_tokens)
@@ -484,8 +496,8 @@ class Aligner:
 
     def _fill_token_gaps(
         self,
-        tokens: List[Dict],
-        whisper_chars: List[Dict]
+        tokens: List[Dict[str, Any]],
+        whisper_chars: List[Dict[str, Any]]
     ):
         """Fill gaps in token timestamps."""
         current_time = whisper_chars[0]['start'] if whisper_chars else 0.0
@@ -511,3 +523,6 @@ class Aligner:
 
             if token['end'] < token['start']:
                 token['end'] = token['start']
+
+            # Update current_time to end of current token
+            current_time = token['end']

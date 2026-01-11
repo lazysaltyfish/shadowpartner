@@ -35,8 +35,10 @@ def retry_on_ytdlp_errors(
     import yt_dlp
 
     retryable = (
-        yt_dlp.utils.DownloadError,
-        yt_dlp.utils.ExtractorError,
+        # Specifically catch common yt-dlp/network errors
+        (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError),  # type: ignore
+        # and standard network errors
+
         TimeoutError,
         ConnectionError,
     )

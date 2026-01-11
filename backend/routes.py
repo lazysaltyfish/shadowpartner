@@ -199,6 +199,9 @@ async def upload_subtitle(
     if not os.path.exists(UPLOAD_DIR):
         await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)
 
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Subtitle filename is missing")
+
     # Save subtitle file with task_id prefix
     subtitle_ext = os.path.splitext(file.filename)[1] or ".srt"
     subtitle_path = os.path.join(UPLOAD_DIR, f"{task_id}_subtitle{subtitle_ext}")
@@ -303,6 +306,9 @@ async def upload_video(
     temp_file = None
     subtitle_file = None
     try:
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Filename is missing")
+
         await validate_upload_file(file)
         # Save uploaded file immediately
         await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)

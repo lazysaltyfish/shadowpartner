@@ -91,7 +91,8 @@ class VideoDownloader:
     ) -> tuple[str, dict]:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            ext = info["ext"]
+            # info is a dict, but yt-dlp type stubs might be missing or incomplete
+            ext = info.get("ext")  # type: ignore
             if has_ffmpeg:
                 ext = "mp3"
 

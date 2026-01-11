@@ -3,6 +3,30 @@
 ## 项目简介
 这是一个支持 PWA 的视频影子跟读应用。它能自动为 YouTube 视频生成日语字幕（带假名注音和词级别高亮）以及中文翻译，帮助你进行跟读练习。
 
+## 开发环境配置 (Development Setup)
+
+本项目使用 **Pyright** 进行静态类型检查，并使用 **Ruff** 进行代码格式化。
+
+### VS Code 配置
+
+1.  **推荐插件**:
+    *   **Pylance**: 微软官方提供的 Python 语言服务器，内置了 Pyright 支持。
+    *   **Ruff**: 用于实时代码格式化检查。
+
+2.  **配置步骤**:
+    *   项目根目录下已提供 `.vscode/settings.json`。
+    *   打开项目后，按下 `Ctrl + Shift + P`，选择 `Python: Select Interpreter`。
+    *   选择 `backend/.venv/bin/python` 作为解释器。
+    *   如果你发现类型检查未生效，请确保 `Pylance` 已启用。
+
+3.  **命令行验证**:
+    你也可以在命令行手动运行检查：
+    ```bash
+    cd backend
+    uv run pyright  # 类型检查
+    uv run ruff check .  # 代码风格检查
+    ```
+
 ## 环境准备 (Prerequisites)
 
 1.  **Python 3.10+**

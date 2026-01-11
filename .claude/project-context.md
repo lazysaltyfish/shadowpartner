@@ -18,13 +18,16 @@
 
 ### Code Formatting & Quality
 - **Linter/Formatter**: **Ruff** is used for all Python code.
+- **Type Checker / LSP**: **Pyright** is used for static type checking and providing rich IDE features (autocomplete, go-to-definition).
 - **Line Length**: Maximum line length is set to **100** characters (configured in `backend/pyproject.toml`).
 - **Imports**: `isort` rules are enabled via Ruff for automatic import sorting.
-- **Strict Requirement**: AI assistants MUST ensure all code changes comply with these formatting rules.
+- **Strict Requirement**: AI assistants MUST ensure all code changes comply with these formatting and typing rules.
 - **Verification**: After making changes and before proposing a commit, you MUST run Ruff to verify and fix formatting. Focus ONLY on the files you modified to ensure the check is fast and relevant to your changes:
   ```bash
   # Check and format only uncommitted changes
   cd backend && git diff --name-only --diff-filter=d | grep '\.py$' | xargs -r uv run ruff check --fix && git diff --name-only --diff-filter=d | grep '\.py$' | xargs -r uv run ruff format
+  # Optionally run type check
+  cd backend && uv run pyright
   ```
 
 ### Git & Commit Standards
