@@ -225,11 +225,9 @@ try:
     aligner = Aligner()
     translator = Translator()
     subtitle_linearizer = SubtitleLinearizer()
-    is_accelerated = transcriber.device.lower() != "cpu"
-    if is_accelerated:
-        whisper_lock = asyncio.Semaphore(1)
-        whisper_lock_label = "GPU transcription"
-        logger.info("Whisper transcription queue enabled (1 at a time)")
+    whisper_lock = asyncio.Semaphore(1)
+    whisper_lock_label = f"{transcriber.device.upper()} transcription"
+    logger.info("Whisper transcription queue enabled (1 at a time)")
     logger.info(f"All services initialized successfully. Transcriber running on {transcriber.device} (fp16={transcriber.fp16}, model={transcriber.model_size})")
 except Exception as e:
     logger.critical(f"Failed to initialize services: {e}", exc_info=True)
