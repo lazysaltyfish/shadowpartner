@@ -58,8 +58,7 @@ def init_services():
             whisper_lock_label = f"{transcriber.device.upper()} transcription"
         logger.info("Whisper transcription queue enabled (1 at a time)")
         logger.info(
-            "All services initialized successfully. Transcriber running on %s "
-            "(fp16=%s, model=%s)",
+            "All services initialized successfully. Transcriber running on %s (fp16=%s, model=%s)",
             transcriber.device,
             transcriber.fp16,
             transcriber.model_size,
@@ -71,4 +70,3 @@ def init_services():
 def set_executor(executor):
     if translator:
         translator.set_executor(executor)
-

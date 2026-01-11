@@ -64,6 +64,7 @@ def setup_deno():
             subprocess.run(["curl", "-L", "-o", archive_file, url], check=True)
         else:
             import urllib.request
+
             urllib.request.urlretrieve(url, archive_file)
             print("Downloaded using urllib.")
     except Exception as e:
@@ -72,7 +73,7 @@ def setup_deno():
 
     print("Extracting...")
     try:
-        with zipfile.ZipFile(archive_file, 'r') as zip_ref:
+        with zipfile.ZipFile(archive_file, "r") as zip_ref:
             zip_ref.extractall(bin_dir)
     except Exception as e:
         print(f"Extraction failed: {e}")
@@ -90,15 +91,15 @@ def setup_deno():
     if os.path.exists(deno_exe):
         print(f"Deno installed successfully to {deno_exe}")
         try:
-            result = subprocess.run([deno_exe, "--version"],
-                                  check=True,
-                                  stdout=subprocess.PIPE,
-                                  text=True)
+            result = subprocess.run(
+                [deno_exe, "--version"], check=True, stdout=subprocess.PIPE, text=True
+            )
             print(f"Deno version:\n{result.stdout}")
         except Exception as e:
             print(f"Deno verification failed: {e}")
     else:
         print("Failed to find deno binary after extraction.")
+
 
 if __name__ == "__main__":
     setup_deno()

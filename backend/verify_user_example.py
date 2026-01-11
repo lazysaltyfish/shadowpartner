@@ -87,27 +87,29 @@ USER_DATA = """
 ててなんか
 """
 
+
 def main():
     linearizer = SubtitleLinearizer()
-    
+
     # Parse
     # Note: parse_srt filters out empty segments
     raw_segments = linearizer.parse_srt(USER_DATA)
     print(f"Original valid segments count: {len(raw_segments)}")
-    
+
     # Linearize
     linearized_segments = linearizer.linearize(raw_segments)
     print(f"Linearized segments count: {len(linearized_segments)}")
-    
+
     print("\n--- Linearized Content ---")
     full_text = ""
     for seg in linearized_segments:
         # Format time to string for display
         print(f"[{seg['start']:.2f} -> {seg['end']:.2f}] {seg['text']}")
-        full_text += seg['text']
-        
+        full_text += seg["text"]
+
     print("\n--- Combined Text ---")
     print(full_text)
+
 
 if __name__ == "__main__":
     main()

@@ -2,15 +2,14 @@
 Unified logging configuration for ShadowPartner backend.
 Provides consistent logging across all modules with proper formatting and levels.
 """
+
 import logging
 import sys
 from typing import Optional
 
 
 def setup_logger(
-    name: str,
-    level: int = logging.INFO,
-    format_string: Optional[str] = None
+    name: str, level: int = logging.INFO, format_string: Optional[str] = None
 ) -> logging.Logger:
     """
     Setup and return a configured logger.
@@ -37,7 +36,7 @@ def setup_logger(
 
     # Create formatter
     if format_string is None:
-        format_string = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format_string = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
     formatter = logging.Formatter(format_string)
     handler.setFormatter(formatter)

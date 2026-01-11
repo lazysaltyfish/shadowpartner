@@ -54,7 +54,7 @@ def get_video_source(video_id: str) -> str:
         >>> get_video_source('dQw4w9WgXcQ')
         'youtube'
     """
-    if video_id.startswith('upload_'):
-        return 'upload'
+    if video_id.startswith("upload_"):
+        return "upload"
     else:
-        return 'youtube'
+        return "youtube"

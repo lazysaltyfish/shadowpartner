@@ -51,9 +51,9 @@ class SubtitleLinearizer:
         char_metadata = []
 
         for seg_idx, seg in enumerate(subtitles):
-            text = seg.get('text', '')
-            seg_start = seg.get('start', 0.0)
-            seg_end = seg.get('end', 0.0)
+            text = seg.get("text", "")
+            seg_start = seg.get("start", 0.0)
+            seg_end = seg.get("end", 0.0)
 
             if not text:
                 continue
@@ -66,11 +66,9 @@ class SubtitleLinearizer:
 
             for char in new_content:
                 merged_text += char
-                char_metadata.append({
-                    'seg_idx': seg_idx,
-                    'seg_start': seg_start,
-                    'seg_end': seg_end
-                })
+                char_metadata.append(
+                    {"seg_idx": seg_idx, "seg_start": seg_start, "seg_end": seg_end}
+                )
 
         return merged_text, char_metadata
 
@@ -94,8 +92,9 @@ class SubtitleLinearizer:
 
         return 0
 
-    def _rebuild_simple_segments(self, merged_text: str, char_metadata: List[Dict],
-                                  original_segments: List[Dict]) -> List[Dict]:
+    def _rebuild_simple_segments(
+        self, merged_text: str, char_metadata: List[Dict], original_segments: List[Dict]
+    ) -> List[Dict]:
         """
         Rebuild segment list from deduplicated text (for legacy compatibility).
         Each segment contains only its unique (non-overlapping) content.
@@ -107,34 +106,34 @@ class SubtitleLinearizer:
         segments_chars = defaultdict(list)
 
         for i, (char, meta) in enumerate(zip(merged_text, char_metadata)):
-            seg_idx = meta['seg_idx']
-            segments_chars[seg_idx].append({
-                'char': char,
-                'seg_start': meta['seg_start'],
-                'seg_end': meta['seg_end']
-            })
+            seg_idx = meta["seg_idx"]
+            segments_chars[seg_idx].append(
+                {"char": char, "seg_start": meta["seg_start"], "seg_end": meta["seg_end"]}
+            )
 
         # Build result segments
         result = []
         for seg_idx in sorted(segments_chars.keys()):
             chars = segments_chars[seg_idx]
-            text = "".join(c['char'] for c in chars).strip()
+            text = "".join(c["char"] for c in chars).strip()
 
             if text:
-                result.append({
-                    'text': text,
-                    'start': chars[0]['seg_start'],
-                    'end': chars[-1]['seg_end'],
-                    'words': []  # Will be populated by calibration
-                })
+                result.append(
+                    {
+                        "text": text,
+                        "start": chars[0]["seg_start"],
+                        "end": chars[-1]["seg_end"],
+                        "words": [],  # Will be populated by calibration
+                    }
+                )
 
         return result
 
     @staticmethod
     def parse_srt_time(time_str: str) -> float:
         """Parse SRT timestamp (HH:MM:SS,mmm) to seconds."""
-        time_str = time_str.replace(',', '.')
-        parts = time_str.split(':')
+        time_str = time_str.replace(",", ".")
+        parts = time_str.split(":")
         hours = int(parts[0])
         minutes = int(parts[1])
         seconds = float(parts[2])
@@ -145,17 +144,17 @@ class SubtitleLinearizer:
         Parse SRT content into a list of segments.
         """
         segments = []
-        content = content.replace('\r\n', '\n').replace('\r', '\n')
-        blocks = re.split(r'\n\n+', content.strip())
+        content = content.replace("\r\n", "\n").replace("\r", "\n")
+        blocks = re.split(r"\n\n+", content.strip())
 
         for block in blocks:
-            lines = block.strip().split('\n')
+            lines = block.strip().split("\n")
             if len(lines) < 2:
                 continue
 
             timestamp_idx = -1
             for i, line in enumerate(lines):
-                if ' --> ' in line:
+                if " --> " in line:
                     timestamp_idx = i
                     break
 
@@ -163,26 +162,22 @@ class SubtitleLinearizer:
                 continue
 
             timestamp_line = lines[timestamp_idx]
-            text_lines = lines[timestamp_idx + 1:]
+            text_lines = lines[timestamp_idx + 1 :]
 
             match = re.match(
-                r'(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})',
-                timestamp_line
+                r"(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})",
+                timestamp_line,
             )
             if not match:
                 continue
 
             start_time = self.parse_srt_time(match.group(1))
             end_time = self.parse_srt_time(match.group(2))
-            text = ' '.join(text_lines).strip()
+            text = " ".join(text_lines).strip()
 
             if not text:
                 continue
 
-            segments.append({
-                'text': text,
-                'start': start_time,
-                'end': end_time
-            })
+            segments.append({"text": text, "start": start_time, "end": end_time})
 
         return segments

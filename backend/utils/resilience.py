@@ -38,7 +38,6 @@ def retry_on_ytdlp_errors(
         # Specifically catch common yt-dlp/network errors
         (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError),  # type: ignore
         # and standard network errors
-
         TimeoutError,
         ConnectionError,
     )
