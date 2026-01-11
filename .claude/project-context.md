@@ -26,6 +26,19 @@
   cd backend && uv run ruff check --fix . && uv run ruff format .
   ```
 
+### Git & Commit Standards
+- **Atomic Commits**: Each commit should focus on a single logical change or feature.
+- **Message Format**:
+  - **Subject**: Imperative mood ("Add feature", not "Added feature"), no trailing period, concise (< 72 chars).
+  - **Body** (Optional): Use bullet points (`- `) for detailing changes in complex commits. Separate from subject with a blank line.
+- **Example**:
+  ```text
+  Refactor backend into modular architecture
+
+  - Split monolithic main.py into routes, processing, etc.
+  - Centralize global state in state.py
+  ```
+
 ## Tech Stack
 - **Backend**: FastAPI (Python 3.11+) + Uvicorn
 - **Frontend**: Vue 3 + Tailwind CSS (CDN-based)
