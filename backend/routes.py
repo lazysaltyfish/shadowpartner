@@ -6,7 +6,7 @@ import time
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 
 import services_registry
 import state
@@ -18,6 +18,7 @@ from models import (
     VideoRequest,
 )
 from processing import download_and_process, process_audio_task
+from rate_limiter import get_limiter
 from services.video_utils import generate_video_id_from_file
 from uploads import (
     UPLOAD_DIR,
@@ -38,21 +39,26 @@ from validators import (
 router = APIRouter()
 logger = get_logger(__name__)
 
+limiter = get_limiter()
+
 
 @router.get("/api/status/{task_id}", response_model=TaskInfo)
-async def get_task_status(task_id: str):
+@limiter.limit("120/minute")
+async def get_task_status(request: Request, task_id: str):
     if task_id not in state.tasks:
         raise HTTPException(status_code=404, detail="Task not found")
     return state.tasks[task_id]
 
 
 @router.get("/")
-async def root():
+@limiter.limit("120/minute")
+async def root(request: Request):
     return {"message": "ShadowPartner API is running"}
 
 
 @router.get("/health")
-async def health_check():
+@limiter.limit("120/minute")
+async def health_check(request: Request):
     """Comprehensive health check."""
     health_status = {
         "status": "healthy",
@@ -71,7 +77,10 @@ async def health_check():
 
 
 @router.post("/api/process", response_model=AsyncProcessResponse)
-async def process_video(request: VideoRequest, background_tasks: BackgroundTasks):
+@limiter.limit("5/minute")
+async def process_video(
+    request: Request, video_request: VideoRequest, background_tasks: BackgroundTasks
+):
     try:
         task_id = str(uuid.uuid4())
         state.tasks[task_id] = TaskInfo(
@@ -79,12 +88,12 @@ async def process_video(request: VideoRequest, background_tasks: BackgroundTasks
             status=TaskStatus.PENDING,
             message="Downloading video...",
         )
-        logger.info(f"Starting video processing task {task_id} for URL: {request.url}")
+        logger.info(f"Starting video processing task {task_id} for URL: {video_request.url}")
 
         if state.task_manager is None:
             raise RuntimeError("Task manager not initialized")
         state.task_manager.create_task(
-            download_and_process(task_id, request.url),
+            download_and_process(task_id, video_request.url),
             name=f"download_and_process:{task_id}",
         )
 
@@ -96,7 +105,9 @@ async def process_video(request: VideoRequest, background_tasks: BackgroundTasks
 
 
 @router.post("/api/upload/init", response_model=AsyncProcessResponse)
+@limiter.limit("5/minute")
 async def init_upload(
+    request: Request,
     filename: str = Form(...),
     total_chunks: int = Form(...),
     total_size: int = Form(...),
@@ -127,7 +138,9 @@ async def init_upload(
 
 
 @router.post("/api/upload/chunk")
+@limiter.limit("300/minute")
 async def upload_chunk(
+    request: Request,
     task_id: str = Form(...),
     chunk_index: int = Form(...),
     file: UploadFile = File(...),
@@ -182,7 +195,9 @@ async def upload_chunk(
 
 
 @router.post("/api/upload/subtitle")
+@limiter.limit("10/minute")
 async def upload_subtitle(
+    request: Request,
     task_id: str = Form(...),
     file: UploadFile = File(...),
 ):
@@ -218,7 +233,9 @@ async def upload_subtitle(
 
 
 @router.post("/api/upload/complete", response_model=AsyncProcessResponse)
+@limiter.limit("5/minute")
 async def complete_upload(
+    request: Request,
     task_id: str = Form(...),
     filename: str = Form(...),
     subtitle_filename: Optional[str] = Form(None),
@@ -287,7 +304,9 @@ async def complete_upload(
 
 
 @router.post("/api/upload", response_model=AsyncProcessResponse)
+@limiter.limit("5/minute")
 async def upload_video(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     subtitle: Optional[UploadFile] = File(None),

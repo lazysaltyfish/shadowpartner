@@ -57,6 +57,8 @@
   - tenacity (retry/backoff)
   - FFmpeg (audio/video processing)
   - python-magic (file type/MIME detection)
+  - slowapi (rate limiting for API endpoints)
+  - limits (rate limiting library for slowapi)
 
 ## Architecture
 
@@ -65,7 +67,8 @@
 main.py                        # FastAPI app factory + wiring
 lifecycle.py                   # Startup/shutdown hooks
 middleware.py                  # Request logging + CORS
-routes.py                      # API endpoints
+rate_limiter.py               # Rate limiting singleton (slowapi wrapper)
+routes.py                      # API endpoints with per-endpoint rate limits
 processing.py                  # Download/transcribe/analyze/translate pipeline
 uploads.py                     # Upload sessions + sweeper + file helpers
 models.py                      # Pydantic models + UploadSession
@@ -135,6 +138,7 @@ Input (File + User SRT Subtitle)
   - Input: `{ "url": "youtube_url" }`
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - Triggers background download and processing
+  - **Rate Limit**: 5 requests per minute (expensive operation)
 
 ### File Upload (Simple - for small files)
 - `POST /api/upload` - Upload video/audio file with optional subtitle (async)
@@ -142,38 +146,46 @@ Input (File + User SRT Subtitle)
   - Validation: extension + MIME allowlist, max size 500MB
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - One-shot upload for files that can be sent in a single request
+  - **Rate Limit**: 5 requests per minute (expensive upload)
 
 ### Chunked Upload (for large files)
 - `POST /api/upload/init` - Initialize chunked upload session
   - Input: `filename`, `total_chunks`, `total_size` (form data, required)
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - Creates empty file and task entry
+  - **Rate Limit**: 5 requests per minute (expensive operation)
 
 - `POST /api/upload/chunk` - Upload a file chunk
   - Input: `task_id`, `chunk_index`, `file` (chunk data)
   - Validation: declared size <= 500MB, MIME check on first chunk
   - Returns: `{ "status": "success" }`
   - Appends chunk to the file (sequential upload)
+  - **Rate Limit**: 300 requests per minute (frequent chunk uploads)
 
 - `POST /api/upload/subtitle` - Upload subtitle for chunked upload session
   - Input: `task_id`, `file` (SRT subtitle)
   - Returns: `{ "status": "success", "path": "..." }`
   - Saves subtitle file associated with the task
+  - **Rate Limit**: 10 requests per minute (moderate frequency)
 
 - `POST /api/upload/complete` - Complete chunked upload and start processing
   - Input: `task_id`, `filename`, `subtitle_filename` (optional), `total_chunks`, `total_size` (required)
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - Triggers background processing with optional subtitle
+  - **Rate Limit**: 5 requests per minute (expensive operation)
 
 ### Task Status
 - `GET /api/status/{task_id}` - Get task status and progress
   - Returns: `TaskInfo` with status, progress, message, result/error
+  - **Rate Limit**: 120 requests per minute (frequent polling)
 
 ### Health Check
 - `GET /` - API heartbeat
   - Returns: `{ "message": "ShadowPartner API is running" }`
+  - **Rate Limit**: 120 requests per minute (health checks)
 - `GET /health` - Comprehensive health check
   - Returns: `{ "status": "healthy", "services": {...}, "active_tasks": 0, "pending_transcription": false }`
+  - **Rate Limit**: 120 requests per minute (health checks)
 
 ## Data Models
 
@@ -243,6 +255,12 @@ Input (File + User SRT Subtitle)
 - `HTTP_PROXY` / `HTTPS_PROXY` - Optional proxy settings for YouTube downloads
 - `UPLOAD_SESSION_TTL_SECONDS` - Chunked upload session TTL (default: 600)
 - `UPLOAD_SESSION_SWEEP_SECONDS` - Sweep interval for expiring uploads (default: 60)
+- `RATE_LIMIT_ENABLED` - Enable/disable rate limiting (true/false, default: true)
+- `RATE_LIMIT_DEFAULT_REQUESTS_PER_MINUTE` - Default requests per minute for all endpoints (default: 60)
+- `RATE_LIMIT_HEALTH_CHECK_PER_MINUTE` - Rate limit for / and /health endpoints (default: 120)
+- `RATE_LIMIT_STATUS_PER_MINUTE` - Rate limit for /api/status/{task_id} endpoint (default: 120)
+- `RATE_LIMIT_UPLOAD_PER_MINUTE` - Rate limit for /api/upload/* endpoints (default: 5)
+- `RATE_LIMIT_PROCESS_PER_MINUTE` - Rate limit for /api/process endpoint (default: 5)
 
 ## Key Features
 1. **Video Input**: YouTube URL or local file upload (drag-and-drop supported)
@@ -269,6 +287,13 @@ Input (File + User SRT Subtitle)
 - **Similarity Checking**: Validates user-provided subtitles against generated ones
 - **Video ID Hashing**: Uploaded files get hashed video IDs for uniqueness
 - **YouTube Player Sizing**: Frontend CSS enforces a 16:9 aspect ratio and iframe fill for `#youtube-player` to avoid collapsed embed height.
+- **Rate Limiting**: Implemented using slowapi (0.1.9) library with in-memory storage; different endpoints have different limits:
+  - `/api/process`: 5/minute (expensive operation)
+  - `/api/upload*`: 5/minute for upload/complete, 10/minute for subtitle, 300/minute for chunk
+  - `/api/status/{task_id}`: 120/minute (frequent polling)
+  - `/` and `/health`: 120/minute (health checks)
+  - All other endpoints: 60/minute (default)
+  - Rate limiter uses IP address as key, returns HTTP 429 when limit exceeded
 
 ## Running the Application
 

@@ -67,6 +67,12 @@ class Settings:
     https_proxy: Optional[str]
     upload_session_ttl_seconds: int
     upload_session_sweep_seconds: int
+    rate_limit_enabled: bool
+    rate_limit_default_requests_per_minute: int
+    rate_limit_health_check_per_minute: int
+    rate_limit_status_per_minute: int
+    rate_limit_upload_per_minute: int
+    rate_limit_process_per_minute: int
 
     @property
     def proxy(self) -> Optional[str]:
@@ -88,4 +94,12 @@ def get_settings() -> Settings:
         https_proxy=_get_env("HTTPS_PROXY") or _get_env("https_proxy"),
         upload_session_ttl_seconds=_parse_int("UPLOAD_SESSION_TTL_SECONDS", 600),
         upload_session_sweep_seconds=_parse_int("UPLOAD_SESSION_SWEEP_SECONDS", 60),
+        rate_limit_enabled=_parse_bool("RATE_LIMIT_ENABLED", True),
+        rate_limit_default_requests_per_minute=_parse_int(
+            "RATE_LIMIT_DEFAULT_REQUESTS_PER_MINUTE", 60
+        ),
+        rate_limit_health_check_per_minute=_parse_int("RATE_LIMIT_HEALTH_CHECK_PER_MINUTE", 120),
+        rate_limit_status_per_minute=_parse_int("RATE_LIMIT_STATUS_PER_MINUTE", 120),
+        rate_limit_upload_per_minute=_parse_int("RATE_LIMIT_UPLOAD_PER_MINUTE", 5),
+        rate_limit_process_per_minute=_parse_int("RATE_LIMIT_PROCESS_PER_MINUTE", 5),
     )
