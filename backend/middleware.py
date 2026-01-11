@@ -62,3 +62,25 @@ async def add_cors_headers(request: Request, call_next):
         pass
 
     return response
+
+
+async def add_security_headers(request: Request, call_next):
+    """Add security headers to all responses.
+
+    Designed to be permissive for development while providing
+    essential security protections for production.
+    """
+    response = await call_next(request)
+
+    # Prevent MIME type sniffing attacks
+    response.headers["X-Content-Type-Options"] = "nosniff"
+
+    # Allow same-origin embedding for flexibility (if needed in future)
+    # This prevents clickjacking from external origins
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+
+    # Enable browser's built-in XSS filter
+    # Note: Deprecated by modern browsers but still useful for older browsers
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+
+    return response

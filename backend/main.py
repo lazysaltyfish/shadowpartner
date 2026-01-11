@@ -4,7 +4,7 @@ from slowapi.errors import RateLimitExceeded
 
 import settings
 from lifecycle import shutdown_event, startup_event
-from middleware import add_cors_headers, log_requests
+from middleware import add_cors_headers, add_security_headers, log_requests
 from rate_limiter import get_limiter
 from routes import router as api_router
 from utils.logger import get_logger
@@ -40,6 +40,7 @@ def create_app() -> FastAPI:
     app.on_event("startup")(startup_event)
     app.on_event("shutdown")(shutdown_event)
     app.middleware("http")(log_requests)
+    app.middleware("http")(add_security_headers)
     app.middleware("http")(add_cors_headers)
     app.include_router(api_router)
     return app
