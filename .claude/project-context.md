@@ -49,6 +49,7 @@
   - google-genai (translation via Gemini API)
   - mecab-python3 + unidic-lite (Japanese NLP)
   - yt-dlp (YouTube downloads)
+  - tenacity (retry/backoff)
   - FFmpeg (audio/video processing)
 
 ## Architecture
@@ -65,6 +66,11 @@ models.py                      # Pydantic models + UploadSession
 state.py                       # In-memory task store + upload sessions + executors
 services_registry.py           # Service initialization + whisper lock (initialized on startup)
 settings.py                    # Centralized environment settings loader
+utils/
+  ├── logger.py                # Logging
+  ├── path_setup.py            # PATH / local bin setup
+  ├── resilience.py            # Retry/backoff helpers for external calls
+  └── task_manager.py          # Async task helpers
 tests/                         # Unit tests
   ├── test_calibration.py
   ├── test_subtitle_linearizer.py
