@@ -27,6 +27,13 @@ from uploads import (
     get_upload_session,
 )
 from utils.logger import get_logger
+from validators import (
+    get_upload_file_size,
+    validate_upload_file,
+    validate_upload_metadata,
+    validate_upload_mime,
+    validate_upload_size,
+)
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -94,6 +101,7 @@ async def init_upload(
     total_chunks: int = Form(...),
     total_size: int = Form(...),
 ):
+    validate_upload_metadata(filename, total_size)
     task_id = str(uuid.uuid4())
     await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)
 
@@ -150,6 +158,19 @@ async def upload_chunk(
                 status_code=409,
                 detail=f"Out-of-order chunk. Expected {session.next_index}, got {chunk_index}.",
             )
+
+        if session.expected_total_size is not None:
+            validate_upload_size(session.expected_total_size)
+        chunk_size = get_upload_file_size(file)
+        current_size = os.path.getsize(session.temp_file)
+        if (
+            session.expected_total_size is not None
+            and current_size + chunk_size > session.expected_total_size
+        ):
+            raise HTTPException(status_code=409, detail="Upload size exceeds declared total")
+        validate_upload_size(current_size + chunk_size)
+        if chunk_index == 0:
+            await validate_upload_mime(file)
 
         await asyncio.to_thread(_write_upload_file, session.temp_file, file, "ab")
         session.next_index += 1
@@ -282,6 +303,7 @@ async def upload_video(
     temp_file = None
     subtitle_file = None
     try:
+        await validate_upload_file(file)
         # Save uploaded file immediately
         await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)
 

@@ -51,6 +51,7 @@
   - yt-dlp (YouTube downloads)
   - tenacity (retry/backoff)
   - FFmpeg (audio/video processing)
+  - python-magic (file type/MIME detection)
 
 ## Architecture
 
@@ -66,6 +67,7 @@ models.py                      # Pydantic models + UploadSession
 state.py                       # In-memory task store + upload sessions + executors
 services_registry.py           # Service initialization + whisper lock (initialized on startup)
 settings.py                    # Centralized environment settings loader
+validators.py                  # Upload file validation (size/type/mime)
 utils/
   ├── logger.py                # Logging
   ├── path_setup.py            # PATH / local bin setup
@@ -132,6 +134,7 @@ Input (File + User SRT Subtitle)
 ### File Upload (Simple - for small files)
 - `POST /api/upload` - Upload video/audio file with optional subtitle (async)
   - Input: `file` (required), `subtitle` (optional SRT file)
+  - Validation: extension + MIME allowlist, max size 500MB
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - One-shot upload for files that can be sent in a single request
 
@@ -143,6 +146,7 @@ Input (File + User SRT Subtitle)
 
 - `POST /api/upload/chunk` - Upload a file chunk
   - Input: `task_id`, `chunk_index`, `file` (chunk data)
+  - Validation: declared size <= 500MB, MIME check on first chunk
   - Returns: `{ "status": "success" }`
   - Appends chunk to the file (sequential upload)
 
