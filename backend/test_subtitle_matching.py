@@ -1,5 +1,6 @@
 import unittest
-from main import check_subtitle_similarity
+
+from processing import check_subtitle_similarity
 
 class TestSubtitleMatching(unittest.TestCase):
     def test_perfect_match(self):

@@ -29,16 +29,24 @@
 
 ### Backend Structure (`/backend`)
 ```
-main.py (696 lines)           # FastAPI app with endpoints
-settings.py                   # Centralized environment settings loader
+main.py                        # FastAPI app factory + wiring
+lifecycle.py                   # Startup/shutdown hooks
+middleware.py                  # Request logging + CORS
+routes.py                      # API endpoints
+processing.py                  # Download/transcribe/analyze/translate pipeline
+uploads.py                     # Upload sessions + sweeper + file helpers
+models.py                      # Pydantic models + UploadSession
+state.py                       # In-memory task store + upload sessions + executors
+services_registry.py           # Service initialization + whisper lock (initialized on startup)
+settings.py                    # Centralized environment settings loader
 services/
-  ├── downloader.py           # YouTube/file download
-  ├── transcriber.py          # Whisper transcription
-  ├── analyzer.py             # Japanese morphological analysis
-  ├── aligner.py              # Timestamp alignment & calibration
-  ├── translator.py           # Gemini translation
-  ├── subtitle_linearizer.py  # Scrolling subtitle deduplication
-  └── video_utils.py          # Video utilities
+  ├── downloader.py            # YouTube/file download
+  ├── transcriber.py           # Whisper transcription
+  ├── analyzer.py              # Japanese morphological analysis
+  ├── aligner.py               # Timestamp alignment & calibration
+  ├── translator.py            # Gemini translation
+  ├── subtitle_linearizer.py   # Scrolling subtitle deduplication
+  └── video_utils.py           # Video utilities
 ```
 
 ### Frontend Structure (`/frontend`)
@@ -203,7 +211,7 @@ Input (File + User SRT Subtitle)
 - **Settings**: Environment settings are centralized in `settings.py` and loaded once via `get_settings()`
 - **Thread Pool**: A single shared `ThreadPoolExecutor` is used for CPU-bound tasks and translation batching
 - **Background Tasks**: Managed by a TaskManager with a 5s drain window for graceful shutdown, then cancel
-- **Whisper Queue**: GPU transcription is serialized with an in-process queue to avoid concurrent GPU tasks
+- **Whisper Queue**: Transcription is serialized (1 at a time) for both CPU and GPU devices
 - **Download Offload**: YouTube downloads run in a background thread to avoid blocking the event loop
 - **Thread-Local MeCab**: Analyzer uses per-thread Tagger instances for safe concurrent NLP
 - **Upload I/O**: Upload writes and file hashing are offloaded to threads; chunked uploads track per-task session state to handle retries, reject out-of-order chunks, and validate total chunks/size; expired upload sessions are cleaned by a TTL sweeper
