@@ -41,8 +41,10 @@ class JapaneseAnalyzer:
             surface = node.surface
             feature_str = node.feature
             
-            # Skip empty nodes (BOS/EOS usually has empty surface in some versions, or specific feature)
-            # But relying on feature string is safer for BOS/EOS detection if surface is not empty.
+            # Skip empty nodes (BOS/EOS usually has empty surface in some versions,
+            # or specific feature)
+            # But relying on feature string is safer for BOS/EOS detection if surface
+            # is not empty.
             if not surface:
                 node = node.next
                 continue
@@ -65,7 +67,8 @@ class JapaneseAnalyzer:
                  if cand and cand != "*":
                     reading = cand
             
-            # If the surface contains Kanji but reading is same as surface, something is wrong or it's not a standard word.
+            # If the surface contains Kanji but reading is same as surface, something is
+            # wrong or it's not a standard word.
             # But we leave it as is for robustness.
             
             # Convert to Hiragana

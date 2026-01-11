@@ -1,9 +1,10 @@
 import os
-import subprocess
-import shutil
 import platform
-import zipfile
+import shutil
+import subprocess
 import tarfile
+import zipfile
+
 
 def setup_ffmpeg():
     system = platform.system()
@@ -20,7 +21,10 @@ def setup_ffmpeg():
         archive_name = "ffmpeg.zip"
     elif system == "Darwin": # macOS
         url = "https://evermeet.cx/ffmpeg/ffmpeg-6.0.zip" # Example URL, might need dynamic checking
-        print("MacOS automatic setup not fully implemented, please install ffmpeg manually (e.g. brew install ffmpeg)")
+        print(
+            "MacOS automatic setup not fully implemented, please install ffmpeg manually "
+            "(e.g. brew install ffmpeg)"
+        )
         return
     else:
         print(f"Unsupported OS: {system}")
@@ -41,7 +45,12 @@ def setup_ffmpeg():
     if os.path.exists(ffmpeg_exe):
         print(f"FFmpeg found at {ffmpeg_exe}")
         try:
-            subprocess.run([ffmpeg_exe, "-version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(
+                [ffmpeg_exe, "-version"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
             print("FFmpeg is operational.")
             return
         except Exception as e:
@@ -124,4 +133,5 @@ def setup_ffmpeg():
 
 if __name__ == "__main__":
     setup_ffmpeg()
+
 

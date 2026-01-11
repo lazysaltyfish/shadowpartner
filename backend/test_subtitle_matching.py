@@ -2,6 +2,7 @@ import unittest
 
 from processing import check_subtitle_similarity
 
+
 class TestSubtitleMatching(unittest.TestCase):
     def test_perfect_match(self):
         gen = [{"text": "こんにちは世界"}, {"text": "これはテストです"}]
@@ -12,7 +13,8 @@ class TestSubtitleMatching(unittest.TestCase):
     def test_partial_match_ok(self):
         # Slightly different but high similarity
         gen = [{"text": "こんにちは世界。"}, {"text": "これはテストです。"}]
-        ref = [{"text": "こんにちは世界"}, {"text": "これはテスト"}] # Missing punctuation/some chars
+        # Missing punctuation/some chars
+        ref = [{"text": "こんにちは世界"}, {"text": "これはテスト"}]
         warnings = check_subtitle_similarity(gen, ref, threshold=0.8)
         self.assertEqual(len(warnings), 0)
 

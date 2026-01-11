@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from settings import get_settings
 from services.aligner import Aligner
 from services.analyzer import JapaneseAnalyzer
 from services.downloader import VideoDownloader
 from services.subtitle_linearizer import SubtitleLinearizer
 from services.transcriber import AudioTranscriber
 from services.translator import Translator
+from settings import get_settings
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

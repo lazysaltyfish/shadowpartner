@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 
 # Ensure backend directory is in python path to import services
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))

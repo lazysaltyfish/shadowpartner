@@ -14,6 +14,18 @@
 ## Project Overview
 **ShadowPartner (影子跟读)** is a PWA for Japanese language learners that processes YouTube videos to generate interactive subtitles with word-level timing, furigana, and Chinese translations.
 
+## Development Standards
+
+### Code Formatting & Quality
+- **Linter/Formatter**: **Ruff** is used for all Python code.
+- **Line Length**: Maximum line length is set to **100** characters (configured in `backend/pyproject.toml`).
+- **Imports**: `isort` rules are enabled via Ruff for automatic import sorting.
+- **Strict Requirement**: AI assistants MUST ensure all code changes comply with these formatting rules.
+- **Verification**: Before proposing or making a commit, you MUST run the following command in the `backend` directory to verify and fix formatting:
+  ```bash
+  cd backend && uv run ruff check --fix . && uv run ruff format .
+  ```
+
 ## Tech Stack
 - **Backend**: FastAPI (Python 3.11+) + Uvicorn
 - **Frontend**: Vue 3 + Tailwind CSS (CDN-based)

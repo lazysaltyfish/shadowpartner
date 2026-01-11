@@ -1,11 +1,12 @@
-import unittest
-import sys
 import os
+import sys
+import unittest
 
 # Add backend to sys path to import services
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from services.subtitle_linearizer import SubtitleLinearizer
+
 
 class TestSubtitleLinearizer(unittest.TestCase):
     def setUp(self):
@@ -28,11 +29,6 @@ class TestSubtitleLinearizer(unittest.TestCase):
         
         result = self.linearizer.linearize(subtitles)
         
-        expected = [
-            {"start": 1.0, "end": 2.0, "text": "A"},
-            {"start": 2.0, "end": 3.0, "text": "B"},
-            {"start": 3.0, "end": 4.0, "text": "C"}
-        ]
         
         self.assertEqual(len(result), 3)
         self.assertEqual(result[0]['text'], "A")
@@ -108,8 +104,10 @@ class TestSubtitleLinearizer(unittest.TestCase):
         result = self.linearizer.linearize(subtitles)
         
         # 1. "I'm looking for"
-        # 2. "looking for a sign". Overlap: "looking for" (len 11). New: " a sign". Strip -> "a sign"
-        # 3. "for a sign of life". Overlap: "for a sign" (len 10). New: " of life". Strip -> "of life"
+        # 2. "looking for a sign". Overlap: "looking for" (len 11).
+        #    New: " a sign". Strip -> "a sign"
+        # 3. "for a sign of life". Overlap: "for a sign" (len 10).
+        #    New: " of life". Strip -> "of life"
         
         self.assertEqual(len(result), 3)
         self.assertEqual(result[0]['text'], "I'm looking for")

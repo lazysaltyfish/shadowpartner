@@ -70,7 +70,8 @@ class VideoResponse(BaseModel):
     title: str
     segments: List[Segment]
     metrics: Optional[ProcessingMetrics] = None
-    has_word_timestamps: bool = True  # False when using user-provided subtitles (no word-level timing)
+    # False when using user-provided subtitles (no word-level timing)
+    has_word_timestamps: bool = True
     warnings: List[str] = []
 
 

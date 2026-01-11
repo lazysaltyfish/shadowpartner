@@ -17,3 +17,25 @@ dependencies = [
     "uvicorn[standard]>=0.40.0",
     "yt-dlp>=2025.12.8",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.11",
+]
+
+[tool.ruff]
+# 设定行长为 100
+line-length = 100
+# 目标 Python 版本
+target-version = "py311"
+
+[tool.ruff.lint]
+# 启用 Pyflakes (`E`), pycodestyle (`F`), 和 isort (`I`)
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.ruff.format]
+# 使用双引号 (默认)
+quote-style = "double"
+# 缩进风格 (默认空格)
+indent-style = "space"

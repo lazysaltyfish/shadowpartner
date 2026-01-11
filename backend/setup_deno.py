@@ -1,8 +1,9 @@
 import os
-import subprocess
-import shutil
 import platform
+import shutil
+import subprocess
 import zipfile
+
 
 def setup_deno():
     """Setup Deno by downloading it to the bin directory"""
@@ -44,7 +45,12 @@ def setup_deno():
     if os.path.exists(deno_exe):
         print(f"Deno found at {deno_exe}")
         try:
-            subprocess.run([deno_exe, "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(
+                [deno_exe, "--version"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
             print("Deno is operational.")
             return
         except Exception as e:

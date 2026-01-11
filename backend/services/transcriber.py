@@ -61,7 +61,10 @@ def parse_srt(content: str) -> list:
         text_lines = lines[timestamp_idx + 1:]
         
         # Parse timestamp: "00:00:01,000 --> 00:00:04,000"
-        match = re.match(r'(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})', timestamp_line)
+        match = re.match(
+            r'(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})',
+            timestamp_line
+        )
         if not match:
             continue
             
@@ -93,9 +96,11 @@ class AudioTranscriber:
         
         Args:
             model_size (str): Size of the whisper model (tiny, base, small, medium, large)
-            device (str): Device to run the model on ("cpu" or "cuda"). If None, detects automatically.
+            device (str): Device to run the model on ("cpu" or "cuda").
+                         If None, detects automatically.
             fp16 (bool): Whether to use fp16 for inference. 
-                         WARNING: fp16=True can cause NaN errors on some GPUs, so default is False for stability.
+                         WARNING: fp16=True can cause NaN errors on some GPUs,
+                         so default is False for stability.
         """
         self.model_size = model_size
         self.fp16 = fp16
@@ -105,7 +110,10 @@ class AudioTranscriber:
         else:
             self.device = device
             
-        logger.info(f"Loading Whisper model ({self.model_size}) on {self.device} with fp16={self.fp16}")
+        logger.info(
+            f"Loading Whisper model ({self.model_size}) on {self.device} "
+            f"with fp16={self.fp16}"
+        )
         try:
             self.model = whisper.load_model(self.model_size, device=self.device)
             logger.info("Whisper model loaded successfully")

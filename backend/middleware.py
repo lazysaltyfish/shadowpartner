@@ -53,7 +53,9 @@ async def add_cors_headers(request: Request, call_next):
         if requested_headers:
             response.headers["Access-Control-Allow-Headers"] = requested_headers
         else:
-            response.headers["Access-Control-Allow-Headers"] = "content-type, authorization, x-requested-with"
+            response.headers["Access-Control-Allow-Headers"] = (
+                "content-type, authorization, x-requested-with"
+            )
     else:
         # Fallback for some cases where Origin might be missing but we want to be permissive
         # Note: '*' cannot be used with credentials: true

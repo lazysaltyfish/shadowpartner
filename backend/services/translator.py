@@ -24,7 +24,10 @@ class Translator:
         self.model_id = settings.gemini_model_id
         self.chunk_size = settings.translate_batch_chunk_size
         self.executor = executor
-        logger.info(f"Translator initialized with model: {self.model_id}, chunk size: {self.chunk_size}")
+        logger.info(
+            f"Translator initialized with model: {self.model_id}, "
+            f"chunk size: {self.chunk_size}"
+        )
 
     def set_executor(self, executor: Optional[ThreadPoolExecutor]) -> None:
         self.executor = executor
@@ -39,7 +42,10 @@ class Translator:
 
         logger.info(f"Starting single translation. Length: {len(text)}")
         try:
-            prompt = f"Translate the following Japanese text to {target_lang}. Only output the translation, no explanation:\n\n{text}"
+            prompt = (
+                f"Translate the following Japanese text to {target_lang}. "
+                f"Only output the translation, no explanation:\n\n{text}"
+            )
             response = self.client.models.generate_content(
                 model=self.model_id,
                 contents=prompt
@@ -62,8 +68,10 @@ class Translator:
         joined_text = "\n".join([f"{idx+1}. {t}" for idx, t in enumerate(chunk)])
         
         prompt = (
-            f"Translate the following Japanese sentences to {target_lang} (Simplified Chinese). "
-            f"Output strictly as a numbered list corresponding to the input numbers (e.g., '1. translation'). "
+            f"Translate the following Japanese sentences to {target_lang} "
+            "(Simplified Chinese). "
+            f"Output strictly as a numbered list corresponding to the input "
+            "numbers (e.g., '1. translation'). "
             f"Do not merge sentences. Maintain the original tone.\n\n{joined_text}"
         )
         
@@ -80,7 +88,8 @@ class Translator:
             chunk_map = {}
             for line in lines:
                 line = line.strip()
-                if not line: continue
+                if not line:
+                    continue
                 # Look for "1. " pattern
                 parts = line.split('.', 1)
                 if len(parts) >= 2 and parts[0].strip().isdigit():
@@ -119,7 +128,11 @@ class Translator:
             chunk = texts[i:i + self.chunk_size]
             chunk_index = i // self.chunk_size
             # Run the synchronous _process_chunk in a thread pool
-            tasks.append(loop.run_in_executor(self.executor, self._process_chunk, chunk, chunk_index, target_lang))
+            tasks.append(
+                loop.run_in_executor(
+                    self.executor, self._process_chunk, chunk, chunk_index, target_lang
+                )
+            )
             
         # Wait for all chunks to complete
         chunk_results_list = await asyncio.gather(*tasks)

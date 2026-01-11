@@ -8,8 +8,8 @@ import time
 from functools import partial
 from typing import Dict, List, Optional
 
-import state
 import services_registry as services
+import state
 from models import ProcessingMetrics, Segment, TaskStatus, VideoResponse, Word
 from uploads import release_upload_session
 from utils.logger import get_logger
@@ -17,8 +17,16 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def update_task(task_id: str, status: TaskStatus, progress: int = 0, message: str = "", result=None, error: str = None):
+def update_task(
+    task_id: str,
+    status: TaskStatus,
+    progress: int = 0,
+    message: str = "",
+    result=None,
+    error: str = None,
+):
     state.update_task(task_id, status, progress, message, result=result, error=error)
+
 
 def _ensure_services_initialized():
     if not all(
@@ -31,7 +39,9 @@ def _ensure_services_initialized():
             services.subtitle_linearizer,
         ]
     ):
-        raise RuntimeError("Services not initialized. Call services_registry.init_services() at startup.")
+        raise RuntimeError(
+            "Services not initialized. Call services_registry.init_services() at startup."
+        )
 
 
 async def run_cpu_bound(func, *args, **kwargs):

@@ -9,7 +9,13 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 
 import state
-from models import AsyncProcessResponse, TaskInfo, TaskStatus, UploadSession, VideoRequest
+from models import (
+    AsyncProcessResponse,
+    TaskInfo,
+    TaskStatus,
+    UploadSession,
+    VideoRequest,
+)
 from processing import download_and_process, process_audio_task
 from services.video_utils import generate_video_id_from_file
 from uploads import (
@@ -111,7 +117,10 @@ async def upload_chunk(
     async with session.lock:
         if session.completed:
             raise HTTPException(status_code=409, detail="Upload already completed")
-        if session.expected_total_chunks is not None and chunk_index >= session.expected_total_chunks:
+        if (
+            session.expected_total_chunks is not None
+            and chunk_index >= session.expected_total_chunks
+        ):
             raise HTTPException(status_code=409, detail="Chunk index exceeds declared total")
         if chunk_index < session.next_index:
             # Duplicate chunk upload; acknowledge to support retries.

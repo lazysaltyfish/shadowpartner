@@ -156,7 +156,6 @@ class Aligner:
         if not text or not char_metadata:
             return []
 
-        timestamps = []
         seg_chars = defaultdict(list)
 
         for i, meta in enumerate(char_metadata):
