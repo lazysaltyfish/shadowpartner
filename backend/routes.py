@@ -8,6 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 
+import services_registry
 import state
 from models import (
     AsyncProcessResponse,
@@ -41,6 +42,25 @@ async def get_task_status(task_id: str):
 @router.get("/")
 async def root():
     return {"message": "ShadowPartner API is running"}
+
+
+@router.get("/health")
+async def health_check():
+    """Comprehensive health check."""
+    health_status = {
+        "status": "healthy",
+        "services": {
+            "transcriber": services_registry.transcriber is not None,
+            "analyzer": services_registry.analyzer is not None,
+            "translator": services_registry.translator is not None,
+            "task_manager": state.task_manager is not None,
+        },
+        "active_tasks": len(state.tasks),
+        "pending_transcription": (
+            services_registry.whisper_lock.locked() if services_registry.whisper_lock else False
+        ),
+    }
+    return health_status
 
 
 @router.post("/api/process", response_model=AsyncProcessResponse)

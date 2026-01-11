@@ -19,7 +19,8 @@ createApp({
         const contextRange = ref(2); // Number of segments to show before and after current
         const backendStatus = ref({
             online: false,
-            lastCheck: null
+            lastCheck: null,
+            details: null
         });
         const taskStatus = ref(null); // { status: 'pending', progress: 0, message: '' }
         const apiBaseUrl = ref('http://localhost:8000');
@@ -77,15 +78,20 @@ createApp({
                 }
 
                 console.log('Checking backend health at:', apiBaseUrl.value);
-                const response = await fetch(`${apiBaseUrl.value}/`, { credentials: 'include' });
+                const response = await fetch(`${apiBaseUrl.value}/health`, { credentials: 'include' });
                 if (response.ok) {
-                    backendStatus.value = { online: true, lastCheck: new Date() };
+                    const healthData = await response.json();
+                    backendStatus.value = {
+                        online: true,
+                        lastCheck: new Date(),
+                        details: healthData
+                    };
                 } else {
                     throw new Error('Backend returned non-200');
                 }
             } catch (e) {
                 console.error('Backend health check failed:', e);
-                backendStatus.value = { online: false, lastCheck: new Date() };
+                backendStatus.value = { online: false, lastCheck: new Date(), details: null };
             }
         };
 

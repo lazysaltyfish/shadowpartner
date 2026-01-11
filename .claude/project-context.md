@@ -161,8 +161,10 @@ Input (File + User SRT Subtitle)
   - Returns: `TaskInfo` with status, progress, message, result/error
 
 ### Health Check
-- `GET /` - API health check
+- `GET /` - API heartbeat
   - Returns: `{ "message": "ShadowPartner API is running" }`
+- `GET /health` - Comprehensive health check
+  - Returns: `{ "status": "healthy", "services": {...}, "active_tasks": 0, "pending_transcription": false }`
 
 ## Data Models
 
