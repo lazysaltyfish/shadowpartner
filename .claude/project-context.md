@@ -64,6 +64,11 @@ models.py                      # Pydantic models + UploadSession
 state.py                       # In-memory task store + upload sessions + executors
 services_registry.py           # Service initialization + whisper lock (initialized on startup)
 settings.py                    # Centralized environment settings loader
+tests/                         # Unit tests
+  ├── test_calibration.py
+  ├── test_subtitle_linearizer.py
+  ├── test_subtitle_matching.py
+  └── test_youtube_download.py
 services/
   ├── downloader.py            # YouTube/file download
   ├── transcriber.py           # Whisper transcription

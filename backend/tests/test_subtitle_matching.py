@@ -1,4 +1,9 @@
+import os
+import sys
 import unittest
+
+# Add backend to sys path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from processing import check_subtitle_similarity
 
@@ -20,7 +25,7 @@ class TestSubtitleMatching(unittest.TestCase):
 
     def test_mismatch_warning(self):
         gen = [{"text": "こんにちは世界"}]
-        ref = [{"text": "さようなら"}] # Completely different
+        ref = [{"text": "さようなら"}]  # Completely different
         warnings = check_subtitle_similarity(gen, ref, threshold=0.5)
         self.assertTrue(len(warnings) > 0)
         print(f"\nWarning generated: {warnings[0]}")
@@ -31,12 +36,13 @@ class TestSubtitleMatching(unittest.TestCase):
         ref = [{"text": f"segment_{i}"} for i in range(100)]
         warnings = check_subtitle_similarity(gen, ref)
         self.assertEqual(len(warnings), 0)
-        
+
         # Mismatch in the middle shouldn't matter if sampling skips it?
         # Actually sampling takes middle 20%, so it should catch middle mismatches.
         ref_mismatch = [{"text": f"WRONG_{i}"} for i in range(100)]
         warnings = check_subtitle_similarity(gen, ref_mismatch)
         self.assertTrue(len(warnings) > 0)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,7 @@ import os
 import sys
 
 # Add the backend directory to the path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.downloader import VideoDownloader
 
@@ -40,6 +40,7 @@ def test_download():
         return False
 
     return True
+
 
 if __name__ == "__main__":
     success = test_download()
