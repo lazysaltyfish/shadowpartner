@@ -4,16 +4,18 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional
 
-from models import TaskInfo, TaskStatus, UploadSession
+from models import AuthSession, TaskInfo, TaskStatus, UploadSession
 from utils.task_manager import TaskManager
 
 # In-memory task store (Use Redis/DB in production)
 tasks: Dict[str, TaskInfo] = {}
 upload_sessions: Dict[str, UploadSession] = {}
+auth_sessions: Dict[str, AuthSession] = {}
 
 # Global thread pool executor for CPU-bound tasks
 executor: Optional[ThreadPoolExecutor] = None
 upload_session_sweeper_task: Optional[asyncio.Task] = None
+auth_session_sweeper_task: Optional[asyncio.Task] = None
 task_manager: Optional[TaskManager] = None
 
 

@@ -39,6 +39,19 @@ class UploadSession:
     processing_started: bool = False
 
 
+@dataclass
+class AuthSession:
+    """Anonymous authentication session for upload access control."""
+
+    session_id: str
+    ip_address: str
+    created_at: float
+    expires_at: float
+    upload_count: int = 0
+    total_size: int = 0
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
 class VideoRequest(BaseModel):
     url: str
 
@@ -78,3 +91,8 @@ class VideoResponse(BaseModel):
 class AsyncProcessResponse(BaseModel):
     task_id: str
     message: str
+
+
+class SessionResponse(BaseModel):
+    session_id: str
+    expires_at: int

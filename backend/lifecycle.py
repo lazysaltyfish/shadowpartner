@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import services_registry
 import state
+from session_manager import sweep_auth_sessions
 from uploads import sweep_upload_sessions
 from utils.logger import get_logger
 from utils.task_manager import TaskManager
@@ -21,6 +22,8 @@ async def startup_event():
     services_registry.set_executor(state.executor)
     state.upload_session_sweeper_task = asyncio.create_task(sweep_upload_sessions())
     logger.info("Upload session sweeper started")
+    state.auth_session_sweeper_task = asyncio.create_task(sweep_auth_sessions())
+    logger.info("Auth session sweeper started")
 
 
 async def shutdown_event():
@@ -38,3 +41,10 @@ async def shutdown_event():
         except asyncio.CancelledError:
             pass
         logger.info("Upload session sweeper stopped")
+    if state.auth_session_sweeper_task:
+        state.auth_session_sweeper_task.cancel()
+        try:
+            await state.auth_session_sweeper_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Auth session sweeper stopped")

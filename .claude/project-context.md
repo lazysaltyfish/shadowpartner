@@ -69,10 +69,11 @@ lifecycle.py                   # Startup/shutdown hooks
 middleware.py                  # Request logging + CORS
 rate_limiter.py               # Rate limiting singleton (slowapi wrapper)
 routes.py                      # API endpoints with per-endpoint rate limits
+session_manager.py             # Anonymous auth session management
 processing.py                  # Download/transcribe/analyze/translate pipeline
 uploads.py                     # Upload sessions + sweeper + file helpers
-models.py                      # Pydantic models + UploadSession
-state.py                       # In-memory task store + upload sessions + executors
+models.py                      # Pydantic models + UploadSession + AuthSession
+state.py                       # In-memory task store + upload sessions + auth sessions + executors
 services_registry.py           # Service initialization + whisper lock (initialized on startup)
 settings.py                    # Centralized environment settings loader
 validators.py                  # Upload file validation (size/type/mime)
@@ -133,6 +134,12 @@ Input (File + User SRT Subtitle)
 
 ## Key API Endpoints
 
+### Authentication
+- `POST /api/session` - Create anonymous session for upload access
+  - Returns: `{ "session_id": "uuid", "expires_at": 1234567890 }`
+  - **Rate Limit**: 10 requests per minute per IP
+  - Client stores `session_id` and sends it via `X-Session-Id` header
+
 ### Video Processing
 - `POST /api/process` - Process YouTube video by URL (async)
   - Input: `{ "url": "youtube_url" }`
@@ -143,36 +150,46 @@ Input (File + User SRT Subtitle)
 ### File Upload (Simple - for small files)
 - `POST /api/upload` - Upload video/audio file with optional subtitle (async)
   - Input: `file` (required), `subtitle` (optional SRT file)
+  - Requires: `X-Session-Id` header (from `/api/session`)
   - Validation: extension + MIME allowlist, max size 500MB
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - One-shot upload for files that can be sent in a single request
   - **Rate Limit**: 5 requests per minute (expensive upload)
+  - **Session Limits**: Max 5 uploads per session, max 500MB total per session
 
 ### Chunked Upload (for large files)
 - `POST /api/upload/init` - Initialize chunked upload session
   - Input: `filename`, `total_chunks`, `total_size` (form data, required)
+  - Requires: `X-Session-Id` header (from `/api/session`)
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - Creates empty file and task entry
   - **Rate Limit**: 5 requests per minute (expensive operation)
+  - **Session Limits**: Max 5 uploads per session, max 500MB total per session
 
 - `POST /api/upload/chunk` - Upload a file chunk
   - Input: `task_id`, `chunk_index`, `file` (chunk data)
+  - Requires: `X-Session-Id` header (from `/api/session`)
   - Validation: declared size <= 500MB, MIME check on first chunk
   - Returns: `{ "status": "success" }`
   - Appends chunk to the file (sequential upload)
   - **Rate Limit**: 300 requests per minute (frequent chunk uploads)
+  - **Session Limits**: Max 5 uploads per session, max 500MB total per session
 
 - `POST /api/upload/subtitle` - Upload subtitle for chunked upload session
   - Input: `task_id`, `file` (SRT subtitle)
+  - Requires: `X-Session-Id` header (from `/api/session`)
   - Returns: `{ "status": "success", "path": "..." }`
   - Saves subtitle file associated with the task
   - **Rate Limit**: 10 requests per minute (moderate frequency)
+  - **Session Limits**: Max 5 uploads per session, max 500MB total per session
 
 - `POST /api/upload/complete` - Complete chunked upload and start processing
   - Input: `task_id`, `filename`, `subtitle_filename` (optional), `total_chunks`, `total_size` (required)
+  - Requires: `X-Session-Id` header (from `/api/session`)
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - Triggers background processing with optional subtitle
   - **Rate Limit**: 5 requests per minute (expensive operation)
+  - **Session Limits**: Max 5 uploads per session, max 500MB total per session
 
 ### Task Status
 - `GET /api/status/{task_id}` - Get task status and progress
@@ -182,10 +199,10 @@ Input (File + User SRT Subtitle)
 ### Health Check
 - `GET /` - API heartbeat
   - Returns: `{ "message": "ShadowPartner API is running" }`
-  - **Rate Limit**: 120 requests per minute (health checks)
+  - **Rate Limit**: exempt (no limit)
 - `GET /health` - Comprehensive health check
   - Returns: `{ "status": "healthy", "services": {...}, "active_tasks": 0, "pending_transcription": false }`
-  - **Rate Limit**: 120 requests per minute (health checks)
+  - **Rate Limit**: exempt (no limit)
 
 ## Data Models
 
@@ -244,6 +261,18 @@ Input (File + User SRT Subtitle)
 }
 ```
 
+### AuthSession (for anonymous upload authentication)
+```python
+{
+  session_id: str,  # UUID for session identification
+  ip_address: str,  # IP address of session creator
+  created_at: float,  # Unix timestamp
+  expires_at: float,  # Unix timestamp (1 hour TTL by default)
+  upload_count: int,  # Number of uploads initiated (max 5)
+  total_size: int,  # Total bytes uploaded (max 500MB)
+}
+```
+
 ## Environment Variables (.env)
 - `WHISPER_DEVICE` - GPU/CPU selection (cuda/cpu/None for auto, default: None)
 - `WHISPER_FP16` - Half-precision inference (true/false, default: false)
@@ -257,10 +286,13 @@ Input (File + User SRT Subtitle)
 - `UPLOAD_SESSION_SWEEP_SECONDS` - Sweep interval for expiring uploads (default: 60)
 - `RATE_LIMIT_ENABLED` - Enable/disable rate limiting (true/false, default: true)
 - `RATE_LIMIT_DEFAULT_REQUESTS_PER_MINUTE` - Default requests per minute for all endpoints (default: 60)
-- `RATE_LIMIT_HEALTH_CHECK_PER_MINUTE` - Rate limit for / and /health endpoints (default: 120)
+- `RATE_LIMIT_HEALTH_CHECK_PER_MINUTE` - Rate limit for / and /health endpoints (default: 120, currently exempt)
 - `RATE_LIMIT_STATUS_PER_MINUTE` - Rate limit for /api/status/{task_id} endpoint (default: 120)
 - `RATE_LIMIT_UPLOAD_PER_MINUTE` - Rate limit for /api/upload/* endpoints (default: 5)
 - `RATE_LIMIT_PROCESS_PER_MINUTE` - Rate limit for /api/process endpoint (default: 5)
+- `AUTH_SESSION_TTL_SECONDS` - Auth session TTL in seconds (default: 3600, 1 hour)
+- `AUTH_SESSION_MAX_UPLOADS` - Max uploads per auth session (default: 5)
+- `AUTH_SESSION_MAX_TOTAL_SIZE` - Max total upload size per session in bytes (default: 524288000, 500MB)
 
 ## Key Features
 1. **Video Input**: YouTube URL or local file upload (drag-and-drop supported)
@@ -291,9 +323,18 @@ Input (File + User SRT Subtitle)
   - `/api/process`: 5/minute (expensive operation)
   - `/api/upload*`: 5/minute for upload/complete, 10/minute for subtitle, 300/minute for chunk
   - `/api/status/{task_id}`: 120/minute (frequent polling)
-  - `/` and `/health`: 120/minute (health checks)
+  - `/` and `/health`: exempt (no limit)
   - All other endpoints: 60/minute (default)
   - Rate limiter uses IP address as key, returns HTTP 429 when limit exceeded
+- **Anonymous Authentication**: Upload endpoints require an anonymous session (via `/api/session`)
+  - Client stores `session_id` and sends via `X-Session-Id` header with configurable limits:
+    - Max 5 uploads per session
+    - Max 500MB total upload size per session
+    - Session TTL: 1 hour (configurable)
+  - Session creation rate limited: 10 requests per minute per IP
+  - Expired sessions automatically cleaned every 60 seconds
+  - YouTube URL processing (`/api/process`) accepts `X-Session-Id` when available to count toward session limits
+  - Frontend auto-manages session: creates on first upload, reuses if valid, clears on 401 error
 
 ## Running the Application
 

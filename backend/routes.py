@@ -6,12 +6,24 @@ import time
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 
 import services_registry
+import session_manager
 import state
 from models import (
     AsyncProcessResponse,
+    AuthSession,
+    SessionResponse,
     TaskInfo,
     TaskStatus,
     UploadSession,
@@ -51,13 +63,13 @@ async def get_task_status(request: Request, task_id: str):
 
 
 @router.get("/")
-@limiter.limit("120/minute")
+@limiter.exempt
 async def root(request: Request):
     return {"message": "ShadowPartner API is running"}
 
 
 @router.get("/health")
-@limiter.limit("120/minute")
+@limiter.exempt
 async def health_check(request: Request):
     """Comprehensive health check."""
     health_status = {
@@ -76,10 +88,22 @@ async def health_check(request: Request):
     return health_status
 
 
+@router.post("/api/session", response_model=SessionResponse)
+@limiter.limit("10/minute")
+async def create_session(request: Request):
+    """Create a new anonymous session for upload access."""
+    client_host = request.client.host if request.client else "unknown"
+    session = session_manager.create_session(client_host)
+    return SessionResponse(session_id=session.session_id, expires_at=int(session.expires_at))
+
+
 @router.post("/api/process", response_model=AsyncProcessResponse)
 @limiter.limit("5/minute")
 async def process_video(
-    request: Request, video_request: VideoRequest, background_tasks: BackgroundTasks
+    request: Request,
+    video_request: VideoRequest,
+    background_tasks: BackgroundTasks,
+    auth_session: Optional[AuthSession] = Depends(session_manager.get_current_session_optional),
 ):
     try:
         task_id = str(uuid.uuid4())
@@ -89,6 +113,9 @@ async def process_video(
             message="Downloading video...",
         )
         logger.info(f"Starting video processing task {task_id} for URL: {video_request.url}")
+
+        if auth_session:
+            await session_manager.update_session_upload(auth_session, 0, task_increment=True)
 
         if state.task_manager is None:
             raise RuntimeError("Task manager not initialized")
@@ -108,6 +135,7 @@ async def process_video(
 @limiter.limit("5/minute")
 async def init_upload(
     request: Request,
+    auth_session: AuthSession = Depends(session_manager.get_current_session),
     filename: str = Form(...),
     total_chunks: int = Form(...),
     total_size: int = Form(...),
@@ -141,6 +169,7 @@ async def init_upload(
 @limiter.limit("300/minute")
 async def upload_chunk(
     request: Request,
+    auth_session: AuthSession = Depends(session_manager.get_current_session),
     task_id: str = Form(...),
     chunk_index: int = Form(...),
     file: UploadFile = File(...),
@@ -198,6 +227,7 @@ async def upload_chunk(
 @limiter.limit("10/minute")
 async def upload_subtitle(
     request: Request,
+    auth_session: AuthSession = Depends(session_manager.get_current_session),
     task_id: str = Form(...),
     file: UploadFile = File(...),
 ):
@@ -236,6 +266,7 @@ async def upload_subtitle(
 @limiter.limit("5/minute")
 async def complete_upload(
     request: Request,
+    auth_session: AuthSession = Depends(session_manager.get_current_session),
     task_id: str = Form(...),
     filename: str = Form(...),
     subtitle_filename: Optional[str] = Form(None),
@@ -286,6 +317,8 @@ async def complete_upload(
         session.completed = True
         session.processing_started = True
 
+        await session_manager.update_session_upload(auth_session, total_size, task_increment=True)
+
         if state.task_manager is None:
             raise RuntimeError("Task manager not initialized")
         state.task_manager.create_task(
@@ -308,6 +341,7 @@ async def complete_upload(
 async def upload_video(
     request: Request,
     background_tasks: BackgroundTasks,
+    auth_session: AuthSession = Depends(session_manager.get_current_session),
     file: UploadFile = File(...),
     subtitle: Optional[UploadFile] = File(None),
 ):
@@ -338,6 +372,9 @@ async def upload_video(
         temp_file = os.path.join(UPLOAD_DIR, f"{session_id}{ext}")
 
         await asyncio.to_thread(_write_upload_file, temp_file, file, "wb")
+
+        file_size = file.size if file.size is not None else 0
+        await session_manager.update_session_upload(auth_session, file_size, task_increment=False)
 
         logger.info(f"File uploaded: {temp_file}")
 

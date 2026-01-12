@@ -24,6 +24,9 @@ createApp({
         });
         const taskStatus = ref(null); // { status: 'pending', progress: 0, message: '' }
         const apiBaseUrl = ref('http://localhost:8000');
+        const sessionId = ref(null);
+        const SESSION_STORAGE_KEY = 'shadowpartner_session_id';
+        const SESSION_HEADER_NAME = 'X-Session-Id';
 
         const manualUpdateBaseUrl = () => {
              console.log('Manually updating API Base URL to:', apiBaseUrl.value);
@@ -94,6 +97,51 @@ createApp({
                 backendStatus.value = { online: false, lastCheck: new Date(), details: null };
             }
         };
+
+        // Session Management
+        const getSessionId = () => {
+            return localStorage.getItem(SESSION_STORAGE_KEY);
+        };
+
+        const setSessionId = (id) => {
+            localStorage.setItem(SESSION_STORAGE_KEY, id);
+            sessionId.value = id;
+        };
+
+        const ensureSession = async () => {
+            const existingSession = getSessionId();
+            if (existingSession) {
+                sessionId.value = existingSession;
+                return existingSession;
+            }
+
+            const response = await fetch(`${apiBaseUrl.value}/api/session`, {
+                method: 'POST',
+                credentials: 'include'
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                setSessionId(data.session_id);
+                return data.session_id;
+            } else {
+                throw new Error('Failed to create session');
+            }
+        };
+
+        const clearSession = () => {
+            localStorage.removeItem(SESSION_STORAGE_KEY);
+            sessionId.value = null;
+        };
+
+        const handleSessionExpired = () => {
+            clearSession();
+            window.location.reload();
+        };
+
+        const buildSessionHeaders = (sid) => ({
+            [SESSION_HEADER_NAME]: sid
+        });
 
         // Start checking on mount
         onMounted(() => {
@@ -364,91 +412,125 @@ createApp({
         };
 
         const uploadChunks = async (file, subtitleFile) => {
-            const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB chunks to be safe
-            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-            const apiUrl = `${apiBaseUrl.value}/api`;
-            
-            // 1. Init
-            const initFormData = new FormData();
-            initFormData.append('filename', file.name);
-            initFormData.append('total_chunks', totalChunks);
-            initFormData.append('total_size', file.size);
-            const initRes = await fetch(`${apiUrl}/upload/init`, {
-                method: 'POST',
-                body: initFormData,
-                credentials: 'include'
-            });
-            if (!initRes.ok) throw new Error("Failed to init upload");
-            const { task_id } = await initRes.json();
-            
-            // 2. Upload Chunks
-            for (let i = 0; i < totalChunks; i++) {
-                const start = i * CHUNK_SIZE;
-                const end = Math.min(file.size, start + CHUNK_SIZE);
-                const chunk = file.slice(start, end);
-                
-                const chunkFormData = new FormData();
-                chunkFormData.append('task_id', task_id);
-                chunkFormData.append('chunk_index', i);
-                chunkFormData.append('file', chunk);
-                
-                // Update UI progress artificially for upload phase
-                taskStatus.value = {
-                    status: 'processing',
-                    progress: Math.floor((i / totalChunks) * 100),
-                    message: `Uploading part ${i+1}/${totalChunks}...`
-                };
-                
-                const chunkRes = await fetch(`${apiUrl}/upload/chunk`, {
+            try {
+                const sid = await ensureSession();
+                const sessionHeaders = buildSessionHeaders(sid);
+
+                const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB chunks to be safe
+                const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+                const apiUrl = `${apiBaseUrl.value}/api`;
+
+                // 1. Init
+                const initFormData = new FormData();
+                initFormData.append('filename', file.name);
+                initFormData.append('total_chunks', totalChunks);
+                initFormData.append('total_size', file.size);
+                const initRes = await fetch(`${apiUrl}/upload/init`, {
                     method: 'POST',
-                    body: chunkFormData,
-                    credentials: 'include'
+                    body: initFormData,
+                    credentials: 'include',
+                    headers: sessionHeaders
                 });
-                
-                if (!chunkRes.ok) throw new Error(`Failed to upload chunk ${i}`);
-            }
-            
-            // 2.5. Upload subtitle file if provided (as a single file, not chunked)
-            if (subtitleFile) {
-                taskStatus.value = {
-                    status: 'processing',
-                    progress: 95,
-                    message: 'Uploading subtitle file...'
-                };
-                
-                const subtitleFormData = new FormData();
-                subtitleFormData.append('task_id', task_id);
-                subtitleFormData.append('file', subtitleFile);
-                
-                const subtitleRes = await fetch(`${apiUrl}/upload/subtitle`, {
-                    method: 'POST',
-                    body: subtitleFormData,
-                    credentials: 'include'
-                });
-                
-                if (!subtitleRes.ok) {
-                    console.warn('Failed to upload subtitle, continuing without it');
+                if (!initRes.ok) {
+                    if (initRes.status === 401) {
+                        handleSessionExpired();
+                        throw new Error('Session expired, please try again');
+                    }
+                    throw new Error("Failed to init upload");
                 }
-            }
-            
-            // 3. Complete
-            const completeFormData = new FormData();
-            completeFormData.append('task_id', task_id);
-            completeFormData.append('filename', file.name);
-            completeFormData.append('total_chunks', totalChunks);
-            completeFormData.append('total_size', file.size);
-            if (subtitleFile) {
-                completeFormData.append('subtitle_filename', subtitleFile.name);
-            }
-            
-            const completeRes = await fetch(`${apiUrl}/upload/complete`, {
-                method: 'POST',
-                body: completeFormData,
-                credentials: 'include'
-            });
-            
-            if (!completeRes.ok) throw new Error("Failed to complete upload");
-            return task_id;
+                const { task_id } = await initRes.json();
+
+                // 2. Upload Chunks
+                for (let i = 0; i < totalChunks; i++) {
+                    const start = i * CHUNK_SIZE;
+                    const end = Math.min(file.size, start + CHUNK_SIZE);
+                    const chunk = file.slice(start, end);
+
+                    const chunkFormData = new FormData();
+                    chunkFormData.append('task_id', task_id);
+                    chunkFormData.append('chunk_index', i);
+                    chunkFormData.append('file', chunk);
+
+                    // Update UI progress artificially for upload phase
+                    taskStatus.value = {
+                        status: 'processing',
+                        progress: Math.floor((i / totalChunks) * 100),
+                        message: `Uploading part ${i+1}/${totalChunks}...`
+                    };
+
+                    const chunkRes = await fetch(`${apiUrl}/upload/chunk`, {
+                        method: 'POST',
+                        body: chunkFormData,
+                        credentials: 'include',
+                        headers: sessionHeaders
+                    });
+
+                    if (!chunkRes.ok) {
+                        if (chunkRes.status === 401) {
+                            handleSessionExpired();
+                            throw new Error('Session expired, please try again');
+                        }
+                        throw new Error(`Failed to upload chunk ${i}`);
+                    }
+                }
+                
+                // 2.5. Upload subtitle file if provided (as a single file, not chunked)
+                if (subtitleFile) {
+                    taskStatus.value = {
+                        status: 'processing',
+                        progress: 95,
+                        message: 'Uploading subtitle file...'
+                    };
+
+                    const subtitleFormData = new FormData();
+                    subtitleFormData.append('task_id', task_id);
+                    subtitleFormData.append('file', subtitleFile);
+
+                    const subtitleRes = await fetch(`${apiUrl}/upload/subtitle`, {
+                        method: 'POST',
+                        body: subtitleFormData,
+                        credentials: 'include',
+                        headers: sessionHeaders
+                    });
+
+                    if (!subtitleRes.ok) {
+                        if (subtitleRes.status === 401) {
+                            handleSessionExpired();
+                            throw new Error('Session expired, please try again');
+                        }
+                        console.warn('Failed to upload subtitle, continuing without it');
+                    }
+                }
+                
+                // 3. Complete
+                const completeFormData = new FormData();
+                completeFormData.append('task_id', task_id);
+                completeFormData.append('filename', file.name);
+                completeFormData.append('total_chunks', totalChunks);
+                completeFormData.append('total_size', file.size);
+                if (subtitleFile) {
+                    completeFormData.append('subtitle_filename', subtitleFile.name);
+                }
+
+                const completeRes = await fetch(`${apiUrl}/upload/complete`, {
+                    method: 'POST',
+                    body: completeFormData,
+                    credentials: 'include',
+                    headers: sessionHeaders
+                });
+
+                if (!completeRes.ok) {
+                    if (completeRes.status === 401) {
+                        handleSessionExpired();
+                        throw new Error('Session expired, please try again');
+                    }
+                    throw new Error("Failed to complete upload");
+                }
+                return task_id;
+        } catch (error) {
+            console.error('Upload error:', error);
+            throw error;
+        }
         };
 
         const processVideo = async () => {
@@ -499,13 +581,19 @@ createApp({
                             formData.append('subtitle', selectedSubtitleFile.value);
                         }
                         
+                        const sid = await ensureSession();
                         response = await fetch(`${apiUrl}/upload`, {
                             method: 'POST',
                             body: formData,
-                            credentials: 'include'
+                            credentials: 'include',
+                            headers: buildSessionHeaders(sid)
                         });
                         
                         if (!response.ok) {
+                            if (response.status === 401) {
+                                handleSessionExpired();
+                                throw new Error('Session expired, please try again');
+                            }
                             throw new Error(`API Error: ${response.statusText}`);
                         }
                         
@@ -523,16 +611,22 @@ createApp({
                     }
                     const videoId = match[2];
 
+                    const sid = await ensureSession();
                     response = await fetch(`${apiUrl}/process`, {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json'
+                            'Content-Type': 'application/json',
+                            ...buildSessionHeaders(sid)
                         },
                         body: JSON.stringify({ url: videoUrl.value }),
                         credentials: 'include'
                     });
 
                     if (!response.ok) {
+                        if (response.status === 401) {
+                            handleSessionExpired();
+                            throw new Error('Session expired, please try again');
+                        }
                         throw new Error(`API Error: ${response.statusText}`);
                     }
                     

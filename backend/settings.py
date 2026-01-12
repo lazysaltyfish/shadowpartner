@@ -73,6 +73,9 @@ class Settings:
     rate_limit_status_per_minute: int
     rate_limit_upload_per_minute: int
     rate_limit_process_per_minute: int
+    auth_session_ttl_seconds: int
+    auth_session_max_uploads: int
+    auth_session_max_total_size: int
 
     @property
     def proxy(self) -> Optional[str]:
@@ -102,4 +105,7 @@ def get_settings() -> Settings:
         rate_limit_status_per_minute=_parse_int("RATE_LIMIT_STATUS_PER_MINUTE", 120),
         rate_limit_upload_per_minute=_parse_int("RATE_LIMIT_UPLOAD_PER_MINUTE", 5),
         rate_limit_process_per_minute=_parse_int("RATE_LIMIT_PROCESS_PER_MINUTE", 5),
+        auth_session_ttl_seconds=_parse_int("AUTH_SESSION_TTL_SECONDS", 3600),
+        auth_session_max_uploads=_parse_int("AUTH_SESSION_MAX_UPLOADS", 5),
+        auth_session_max_total_size=_parse_int("AUTH_SESSION_MAX_TOTAL_SIZE", 524288000),
     )
