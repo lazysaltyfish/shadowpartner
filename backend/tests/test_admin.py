@@ -123,9 +123,7 @@ def test_admin_login_invalid_credentials(client):
         "session_manager.get_settings",
         return_value=Mock(admin_username="admin", admin_password="admin123"),
     ):
-        response = client.post(
-            "/api/admin/login", json={"username": "admin", "password": "wrong"}
-        )
+        response = client.post("/api/admin/login", json={"username": "admin", "password": "wrong"})
 
     assert response.status_code == 401
     assert "Invalid admin credentials" in response.json()["detail"]

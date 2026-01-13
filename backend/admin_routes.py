@@ -4,7 +4,7 @@ import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from db import get_session
 from db.crud import (
@@ -43,8 +43,7 @@ class UserResponse(BaseModel):
     created_at: str
     assets_count: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AssetResponse(BaseModel):
@@ -57,8 +56,7 @@ class AssetResponse(BaseModel):
     created_at: str
     subtitle_tracks_count: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SubtitleTrackResponse(BaseModel):
@@ -70,8 +68,7 @@ class SubtitleTrackResponse(BaseModel):
     is_default: bool
     created_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ==================== Admin Authentication ====================

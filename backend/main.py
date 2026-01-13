@@ -1,3 +1,6 @@
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -14,6 +17,13 @@ from utils.path_setup import setup_local_bin_path
 logger = get_logger(__name__)
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    await startup_event()
+    yield
+    await shutdown_event()
+
+
 def create_app() -> FastAPI:
     local_bin = setup_local_bin_path()
     if local_bin:
@@ -22,7 +32,7 @@ def create_app() -> FastAPI:
     cfg = settings.get_settings()
     limiter = get_limiter()
 
-    app = FastAPI(title="ShadowPartner API")
+    app = FastAPI(title="ShadowPartner API", lifespan=lifespan)
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -38,8 +48,6 @@ def create_app() -> FastAPI:
     else:
         logger.info("Rate limiting disabled")
 
-    app.on_event("startup")(startup_event)
-    app.on_event("shutdown")(shutdown_event)
     app.middleware("http")(log_requests)
     app.middleware("http")(add_security_headers)
     app.middleware("http")(add_cors_headers)

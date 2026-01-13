@@ -36,6 +36,7 @@
 - **Pre-commit Requirement**: All tests MUST pass before committing code changes.
 - **Test Command**: Run `cd backend && uv run pytest tests/` to execute all tests.
 - **Strict Requirement**: AI assistants MUST run tests and ensure they all pass before proposing any commit.
+- **Warning Policy**: Warnings from project source code (non-test files) are NOT allowed and must be fixed. Warnings from test files (`tests/`) are acceptable and can be ignored.
 
 ### Git & Commit Standards
 - **Atomic Commits**: Each commit should focus on a single logical change or feature.
