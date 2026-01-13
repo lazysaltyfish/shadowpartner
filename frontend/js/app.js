@@ -1,4 +1,4 @@
-const { createApp, ref, onMounted, nextTick, computed } = Vue;
+const { createApp, ref, onMounted, onUnmounted, nextTick, computed } = Vue;
 
 createApp({
     setup() {
@@ -27,6 +27,11 @@ createApp({
         const sessionId = ref(null);
         const SESSION_STORAGE_KEY = 'shadowpartner_session_id';
         const SESSION_HEADER_NAME = 'X-Session-Id';
+
+        // AbortController for canceling requests on page unload
+        let abortController = new AbortController();
+        let pollTimeoutId = null;
+        let healthCheckIntervalId = null;
 
         const manualUpdateBaseUrl = () => {
              console.log('Manually updating API Base URL to:', apiBaseUrl.value);
@@ -81,7 +86,9 @@ createApp({
                 }
 
                 console.log('Checking backend health at:', apiBaseUrl.value);
-                const response = await fetch(`${apiBaseUrl.value}/health`, { credentials: 'include' });
+                const response = await fetch(`${apiBaseUrl.value}/health`, {
+                    credentials: 'include'
+                });
                 if (response.ok) {
                     const healthData = await response.json();
                     backendStatus.value = {
@@ -108,11 +115,16 @@ createApp({
             sessionId.value = id;
         };
 
-        const ensureSession = async () => {
-            const existingSession = getSessionId();
-            if (existingSession) {
-                sessionId.value = existingSession;
-                return existingSession;
+        const ensureSession = async (forceRefresh = false) => {
+            if (!forceRefresh) {
+                const existingSession = getSessionId();
+                if (existingSession) {
+                    sessionId.value = existingSession;
+                    return existingSession;
+                }
+            } else {
+                // Clear existing session before refreshing
+                clearSession();
             }
 
             const response = await fetch(`${apiBaseUrl.value}/api/session`, {
@@ -136,18 +148,48 @@ createApp({
 
         const handleSessionExpired = () => {
             clearSession();
-            window.location.reload();
+            // Don't reload page - let the caller handle retry
         };
 
         const buildSessionHeaders = (sid) => ({
             [SESSION_HEADER_NAME]: sid
         });
 
+        // Fetch with automatic session refresh on 401
+        const fetchWithAuth = async (url, options = {}, retryOnAuth = true) => {
+            const sid = await ensureSession();
+            const headers = { ...(options.headers || {}), ...buildSessionHeaders(sid) };
+            const response = await fetch(url, { ...options, headers, credentials: 'include' });
+
+            if (response.status === 401 && retryOnAuth) {
+                console.log('[Debug] Session expired, refreshing and retrying...');
+                await ensureSession(true);
+                return fetchWithAuth(url, options, false);
+            }
+            return response;
+        };
+
+        // Cleanup function
+        const cleanup = () => {
+            abortController.abort();
+            if (healthCheckIntervalId) clearInterval(healthCheckIntervalId);
+            if (pollTimeoutId) clearTimeout(pollTimeoutId);
+            if (window._pollInterval) clearInterval(window._pollInterval);
+        };
+
         // Start checking on mount
         onMounted(() => {
             checkBackendHealth();
             // Poll every 30 seconds
-            setInterval(checkBackendHealth, 30000);
+            healthCheckIntervalId = setInterval(checkBackendHealth, 30000);
+            // Cleanup on page refresh/close
+            window.addEventListener('beforeunload', cleanup);
+        });
+
+        // Cleanup on unmount
+        onUnmounted(() => {
+            cleanup();
+            window.removeEventListener('beforeunload', cleanup);
         });
 
         // YouTube Player API
@@ -413,9 +455,6 @@ createApp({
 
         const uploadChunks = async (file, subtitleFile) => {
             try {
-                const sid = await ensureSession();
-                const sessionHeaders = buildSessionHeaders(sid);
-
                 const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB chunks to be safe
                 const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
                 const apiUrl = `${apiBaseUrl.value}/api`;
@@ -425,17 +464,11 @@ createApp({
                 initFormData.append('filename', file.name);
                 initFormData.append('total_chunks', totalChunks);
                 initFormData.append('total_size', file.size);
-                const initRes = await fetch(`${apiUrl}/upload/init`, {
+                let initRes = await fetchWithAuth(`${apiUrl}/upload/init`, {
                     method: 'POST',
-                    body: initFormData,
-                    credentials: 'include',
-                    headers: sessionHeaders
+                    body: initFormData
                 });
                 if (!initRes.ok) {
-                    if (initRes.status === 401) {
-                        handleSessionExpired();
-                        throw new Error('Session expired, please try again');
-                    }
                     throw new Error("Failed to init upload");
                 }
                 const { task_id } = await initRes.json();
@@ -458,18 +491,12 @@ createApp({
                         message: `Uploading part ${i+1}/${totalChunks}...`
                     };
 
-                    const chunkRes = await fetch(`${apiUrl}/upload/chunk`, {
+                    const chunkRes = await fetchWithAuth(`${apiUrl}/upload/chunk`, {
                         method: 'POST',
-                        body: chunkFormData,
-                        credentials: 'include',
-                        headers: sessionHeaders
+                        body: chunkFormData
                     });
 
                     if (!chunkRes.ok) {
-                        if (chunkRes.status === 401) {
-                            handleSessionExpired();
-                            throw new Error('Session expired, please try again');
-                        }
                         throw new Error(`Failed to upload chunk ${i}`);
                     }
                 }
@@ -486,18 +513,12 @@ createApp({
                     subtitleFormData.append('task_id', task_id);
                     subtitleFormData.append('file', subtitleFile);
 
-                    const subtitleRes = await fetch(`${apiUrl}/upload/subtitle`, {
+                    const subtitleRes = await fetchWithAuth(`${apiUrl}/upload/subtitle`, {
                         method: 'POST',
-                        body: subtitleFormData,
-                        credentials: 'include',
-                        headers: sessionHeaders
+                        body: subtitleFormData
                     });
 
                     if (!subtitleRes.ok) {
-                        if (subtitleRes.status === 401) {
-                            handleSessionExpired();
-                            throw new Error('Session expired, please try again');
-                        }
                         console.warn('Failed to upload subtitle, continuing without it');
                     }
                 }
@@ -512,18 +533,12 @@ createApp({
                     completeFormData.append('subtitle_filename', subtitleFile.name);
                 }
 
-                const completeRes = await fetch(`${apiUrl}/upload/complete`, {
+                const completeRes = await fetchWithAuth(`${apiUrl}/upload/complete`, {
                     method: 'POST',
-                    body: completeFormData,
-                    credentials: 'include',
-                    headers: sessionHeaders
+                    body: completeFormData
                 });
 
                 if (!completeRes.ok) {
-                    if (completeRes.status === 401) {
-                        handleSessionExpired();
-                        throw new Error('Session expired, please try again');
-                    }
                     throw new Error("Failed to complete upload");
                 }
                 return task_id;
@@ -580,23 +595,16 @@ createApp({
                         if (selectedSubtitleFile.value) {
                             formData.append('subtitle', selectedSubtitleFile.value);
                         }
-                        
-                        const sid = await ensureSession();
-                        response = await fetch(`${apiUrl}/upload`, {
+
+                        response = await fetchWithAuth(`${apiUrl}/upload`, {
                             method: 'POST',
-                            body: formData,
-                            credentials: 'include',
-                            headers: buildSessionHeaders(sid)
+                            body: formData
                         });
-                        
+
                         if (!response.ok) {
-                            if (response.status === 401) {
-                                handleSessionExpired();
-                                throw new Error('Session expired, please try again');
-                            }
                             throw new Error(`API Error: ${response.statusText}`);
                         }
-                        
+
                         data = await response.json();
                     }
                 } else {
@@ -611,25 +619,18 @@ createApp({
                     }
                     const videoId = match[2];
 
-                    const sid = await ensureSession();
-                    response = await fetch(`${apiUrl}/process`, {
+                    response = await fetchWithAuth(`${apiUrl}/process`, {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json',
-                            ...buildSessionHeaders(sid)
+                            'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({ url: videoUrl.value }),
-                        credentials: 'include'
+                        body: JSON.stringify({ url: videoUrl.value })
                     });
 
                     if (!response.ok) {
-                        if (response.status === 401) {
-                            handleSessionExpired();
-                            throw new Error('Session expired, please try again');
-                        }
                         throw new Error(`API Error: ${response.statusText}`);
                     }
-                    
+
                     data = await response.json();
                 }
                 
@@ -642,7 +643,7 @@ createApp({
                     videoData.value = data;
                     loading.value = false; // Ensure loading is off
                     nextTick(() => {
-                        if (isFile) {
+                        if (isFileMode.value) {
                             initFilePlayer(selectedFile.value);
                         } else {
                             initPlayer(data.video_id);
@@ -659,10 +660,19 @@ createApp({
 
         const pollStatus = async (taskId) => {
             const pollInterval = 5000; // 5 seconds
-            
+
+            // Clear any existing poll timeout
+            if (pollTimeoutId) {
+                clearTimeout(pollTimeoutId);
+                pollTimeoutId = null;
+            }
+
             const check = async () => {
                 try {
-                    const response = await fetch(`${apiBaseUrl.value}/api/status/${taskId}`, { credentials: 'include' });
+                    const response = await fetch(`${apiBaseUrl.value}/api/status/${taskId}`, {
+                        credentials: 'include',
+                        signal: abortController.signal
+                    });
                     if (!response.ok) {
                         throw new Error("Failed to get status");
                     }
@@ -710,9 +720,14 @@ createApp({
                          throw new Error(statusData.error || "Processing failed");
                     } else {
                         // Continue polling
-                        setTimeout(check, pollInterval);
+                        pollTimeoutId = setTimeout(check, pollInterval);
                     }
                 } catch (e) {
+                    // Ignore abort errors (page unload)
+                    if (e.name === 'AbortError') {
+                        console.log('[Debug] Polling aborted');
+                        return;
+                    }
                     console.error("Polling error:", e);
                     alert(`处理出错: ${e.message}`);
                     loading.value = false;

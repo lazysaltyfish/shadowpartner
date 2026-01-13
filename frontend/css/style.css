@@ -1,4 +1,10 @@
 /* Custom Styles */
+
+/* Hide Vue templates until compiled */
+[v-cloak] {
+  display: none !important;
+}
+
 ruby rt {
   user-select: none; /* 防止复制文本时选中注音 */
 }
