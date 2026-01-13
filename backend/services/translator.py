@@ -11,7 +11,9 @@ from utils.resilience import retry_on_http_errors
 # Setup logger
 logger = get_logger(__name__)
 
-DEFAULT_TRANSLATION_TIMEOUT_SECONDS = 30
+DEFAULT_TRANSLATION_TIMEOUT_SECONDS = 60
+DEFAULT_TRANSLATION_TIMEOUT_RETRIES = 2
+DEFAULT_TRANSLATION_TIMEOUT_BACKOFF_SECONDS = 2
 
 
 class Translator:
@@ -123,20 +125,38 @@ class Translator:
         target_lang: str,
     ) -> List[str]:
         loop = asyncio.get_running_loop()
-        try:
-            return await asyncio.wait_for(
-                loop.run_in_executor(
-                    self.executor,
-                    self._process_chunk,
-                    chunk,
-                    chunk_index,
-                    target_lang,
-                ),
-                timeout=self.request_timeout_seconds,
-            )
-        except asyncio.TimeoutError:
-            logger.error("Gemini batch translation timed out for chunk %s", chunk_index + 1)
-            return ["[翻译超时]"] * len(chunk)
+        total_attempts = DEFAULT_TRANSLATION_TIMEOUT_RETRIES + 1
+        for attempt in range(total_attempts):
+            try:
+                return await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self.executor,
+                        self._process_chunk,
+                        chunk,
+                        chunk_index,
+                        target_lang,
+                    ),
+                    timeout=self.request_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                if attempt + 1 >= total_attempts:
+                    logger.error(
+                        "Gemini batch translation timed out for chunk %s after %s attempts",
+                        chunk_index + 1,
+                        total_attempts,
+                    )
+                    return ["[翻译超时]"] * len(chunk)
+                backoff = DEFAULT_TRANSLATION_TIMEOUT_BACKOFF_SECONDS * (2**attempt)
+                logger.warning(
+                    "Gemini batch translation timed out for chunk %s (attempt %s/%s). "
+                    "Retrying in %ss",
+                    chunk_index + 1,
+                    attempt + 1,
+                    total_attempts,
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
+        return ["[翻译超时]"] * len(chunk)
 
     async def translate_batch(self, texts: List[str], target_lang: str = "Chinese") -> List[str]:
         """
