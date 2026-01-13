@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import services_registry
 import state
+from db import init_db
 from session_manager import sweep_auth_sessions
 from uploads import sweep_upload_sessions
 from utils.logger import get_logger
@@ -15,6 +16,9 @@ logger = get_logger(__name__)
 
 async def startup_event():
     """Initialize resources on startup."""
+    init_db()
+    logger.info("Database initialized")
+
     services_registry.init_services()
     state.task_manager = TaskManager(logger)
     state.executor = ThreadPoolExecutor(max_workers=4)

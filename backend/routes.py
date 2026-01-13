@@ -20,6 +20,8 @@ from fastapi import (
 import services_registry
 import session_manager
 import state
+from db import get_session
+from db.crud import get_or_create_guest_user
 from models import (
     AsyncProcessResponse,
     AuthSession,
@@ -28,8 +30,9 @@ from models import (
     TaskStatus,
     UploadSession,
     VideoRequest,
+    VideoResponse,
 )
-from processing import download_and_process, process_audio_task
+from processing import check_cache, download_and_process, process_audio_task
 from rate_limiter import get_limiter
 from services.video_utils import generate_video_id_from_file
 from uploads import (
@@ -38,6 +41,7 @@ from uploads import (
     _touch_file,
     _write_upload_file,
     get_upload_session,
+    release_upload_session,
 )
 from utils.logger import get_logger
 from validators import (
@@ -52,6 +56,75 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 limiter = get_limiter()
+
+
+async def handle_existing_file(
+    file_path: str,
+    filename: str,
+) -> tuple[str, Optional[VideoResponse]]:
+    """Check for existing asset with cached result by file hash.
+
+    Args:
+        file_path: Path to existing file
+        filename: Original filename
+
+    Returns:
+        (video_id, is_cached) - video_id from file hash, is_cached if processed result exists
+    """
+    video_id = await asyncio.to_thread(generate_video_id_from_file, file_path)
+    logger.info(f"Generated video_id: {video_id} for file: {filename}")
+
+    # Check if we have a cached processing result (not just asset exists)
+    cached_result = check_cache(video_id)
+    if cached_result:
+        logger.info(f"Cached result found for: {video_id}, skipping processing")
+        return video_id, cached_result
+
+    return video_id, None
+
+
+async def handle_file_upload(
+    file: UploadFile,
+    filename: str,
+    subtitle: Optional[UploadFile] = None,
+) -> tuple[str, Optional[VideoResponse], Optional[str], Optional[str]]:
+    """Handle file upload with cache check and temp storage.
+
+    Args:
+        file: Uploaded file object
+        filename: Original filename
+        auth_session: Auth session for user tracking
+        subtitle: Optional subtitle file
+
+    Returns:
+        (video_id, cached_result, temp_file, subtitle_path)
+    """
+    # Generate video_id from file hash
+    await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)
+    ext = os.path.splitext(filename)[1] or ".mp3"
+    temp_file = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}{ext}")
+
+    await asyncio.to_thread(_write_upload_file, temp_file, file, "wb")
+    video_id = await asyncio.to_thread(generate_video_id_from_file, temp_file)
+    logger.info(f"Generated video_id: {video_id} for file: {filename}")
+
+    cached_result = check_cache(video_id)
+    if cached_result:
+        logger.info(f"Cached result found for: {video_id}, skipping processing")
+        try:
+            os.remove(temp_file)
+        except OSError as e:
+            logger.warning(f"Failed to remove temp file {temp_file}: {e}")
+        return video_id, cached_result, None, None
+
+    subtitle_file = None
+    if subtitle and subtitle.filename:
+        subtitle_ext = os.path.splitext(subtitle.filename)[1] or ".srt"
+        subtitle_file = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}{subtitle_ext}")
+        await asyncio.to_thread(_write_upload_file, subtitle_file, subtitle, "wb")
+        logger.info(f"Subtitle uploaded: {subtitle_file}")
+
+    return video_id, None, temp_file, subtitle_file
 
 
 @router.get("/api/status/{task_id}", response_model=TaskInfo)
@@ -93,7 +166,12 @@ async def health_check(request: Request):
 async def create_session(request: Request):
     """Create a new anonymous session for upload access."""
     client_host = request.client.host if request.client else "unknown"
-    session = session_manager.create_session(client_host)
+
+    # Create Guest User record in DB
+    with get_session() as db:
+        user = get_or_create_guest_user(db, client_host)
+
+    session = session_manager.create_session(client_host, user)
     return SessionResponse(session_id=session.session_id, expires_at=int(session.expires_at))
 
 
@@ -106,6 +184,23 @@ async def process_video(
     auth_session: Optional[AuthSession] = Depends(session_manager.get_current_session_optional),
 ):
     try:
+        # Check for cached result
+        youtube_id = video_request.url.split("v=")[-1].split("&")[0].split("/watch?v=")[-1][:11]
+        cached_result = check_cache(youtube_id)
+
+        if cached_result:
+            task_id = str(uuid.uuid4())
+            state.tasks[task_id] = TaskInfo(
+                task_id=task_id,
+                status=TaskStatus.COMPLETED,
+                progress=100,
+                message="Using cached processing result",
+                result=cached_result,
+            )
+            if auth_session:
+                await session_manager.update_session_upload(auth_session, 0, task_increment=True)
+            return AsyncProcessResponse(task_id=task_id, message="Using cached result")
+
         task_id = str(uuid.uuid4())
         state.tasks[task_id] = TaskInfo(
             task_id=task_id,
@@ -307,10 +402,41 @@ async def complete_upload(
                 subtitle_path = os.path.join(UPLOAD_DIR, subtitle_files[0])
                 logger.info(f"Task {task_id}: Found subtitle for completion - {subtitle_path}")
 
-        # Generate stable video_id based on file content hash
-        video_id = await asyncio.to_thread(generate_video_id_from_file, session.temp_file)
-        logger.info(f"Task {task_id}: Generated video_id={video_id} for file={filename}")
+        # Check for existing asset (deduplication only)
+        # Note: session.temp_file already contains the complete file
+        video_id, cached_result = await handle_existing_file(
+            file_path=session.temp_file,
+            filename=filename,
+        )
 
+        if cached_result:
+            # Update the existing task with cached result
+            state.tasks[task_id] = TaskInfo(
+                task_id=task_id,
+                status=TaskStatus.COMPLETED,
+                progress=100,
+                message="Using cached processing result",
+                result=cached_result,
+            )
+            session.completed = True
+            session.processing_started = True
+            await session_manager.update_session_upload(
+                auth_session, total_size, task_increment=True
+            )
+            if session.temp_file and os.path.exists(session.temp_file):
+                try:
+                    os.remove(session.temp_file)
+                except OSError as e:
+                    logger.warning(f"Failed to remove temp file {session.temp_file}: {e}")
+            if subtitle_path and os.path.exists(subtitle_path):
+                try:
+                    os.remove(subtitle_path)
+                except OSError as e:
+                    logger.warning(f"Failed to remove subtitle file {subtitle_path}: {e}")
+            release_upload_session(task_id)
+            return AsyncProcessResponse(task_id=task_id, message="Using cached result")
+
+        # Start processing
         state.tasks[task_id].status = TaskStatus.PENDING
         state.tasks[task_id].message = "Upload complete. Processing..."
 
@@ -321,14 +447,21 @@ async def complete_upload(
 
         if state.task_manager is None:
             raise RuntimeError("Task manager not initialized")
+
+        # Use the original temp file for processing (session.temp_file contains the uploaded data)
         state.task_manager.create_task(
             process_audio_task(
                 task_id,
                 session.temp_file,
-                video_id,  # Use hash-based video_id
+                video_id,
                 filename,
                 download_time=0.0,
                 subtitle_path=subtitle_path,
+                created_by=auth_session.user_id,
+                asset_meta={
+                    "filename": filename,
+                    "original_ext": os.path.splitext(filename)[1] or ".mp3",
+                },
             ),
             name=f"process_audio_task:{task_id}",
         )
@@ -356,85 +489,60 @@ async def upload_video(
     Returns:
         AsyncProcessResponse with task_id for tracking progress
     """
-    temp_file = None
-    subtitle_file = None
-    try:
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="Filename is missing")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is missing")
 
-        await validate_upload_file(file)
-        # Save uploaded file immediately
-        await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)
+    await validate_upload_file(file)
 
-        session_id = str(uuid.uuid4())
-        # Use mp3 extension as we will process it as audio
-        ext = os.path.splitext(file.filename)[1] or ".mp3"
-        temp_file = os.path.join(UPLOAD_DIR, f"{session_id}{ext}")
+    # Handle file upload with Asset creation and deduplication
+    video_id, cached_result, temp_file, subtitle_path = await handle_file_upload(
+        file, file.filename, subtitle
+    )
 
-        await asyncio.to_thread(_write_upload_file, temp_file, file, "wb")
+    file_size = file.size if file.size is not None else 0
+    await session_manager.update_session_upload(auth_session, file_size, task_increment=True)
 
-        file_size = file.size if file.size is not None else 0
-        await session_manager.update_session_upload(auth_session, file_size, task_increment=False)
-
-        logger.info(f"File uploaded: {temp_file}")
-
-        # Save subtitle file if provided
-        if subtitle and subtitle.filename:
-            subtitle_ext = os.path.splitext(subtitle.filename)[1] or ".srt"
-            subtitle_file = os.path.join(UPLOAD_DIR, f"{session_id}_subtitle{subtitle_ext}")
-
-            await asyncio.to_thread(_write_upload_file, subtitle_file, subtitle, "wb")
-
-            logger.info(f"Subtitle uploaded: {subtitle_file}")
-
-        # Generate stable video_id based on file content hash
-        video_id = await asyncio.to_thread(generate_video_id_from_file, temp_file)
-        logger.info(f"Generated video_id: {video_id} for file: {file.filename}")
-
-        # Start async task
+    if cached_result:
         task_id = str(uuid.uuid4())
-
-        if subtitle_file:
-            state.tasks[task_id] = TaskInfo(
-                task_id=task_id,
-                status=TaskStatus.PENDING,
-                message="Files uploaded. Using provided subtitle...",
-            )
-        else:
-            state.tasks[task_id] = TaskInfo(
-                task_id=task_id,
-                status=TaskStatus.PENDING,
-                message="File uploaded. Queued for processing...",
-            )
-
-        logger.info(f"Starting processing task {task_id} for uploaded file")
-        if state.task_manager is None:
-            raise RuntimeError("Task manager not initialized")
-        state.task_manager.create_task(
-            process_audio_task(
-                task_id,
-                temp_file,
-                video_id,  # Use hash-based video_id
-                file.filename,
-                download_time=0.0,
-                subtitle_path=subtitle_file,
-            ),
-            name=f"process_audio_task:{task_id}",
+        state.tasks[task_id] = TaskInfo(
+            task_id=task_id,
+            status=TaskStatus.COMPLETED,
+            progress=100,
+            message="Using cached processing result",
+            result=cached_result,
         )
+        return AsyncProcessResponse(task_id=task_id, message="Using cached result")
 
-        return AsyncProcessResponse(task_id=task_id, message="File uploaded, processing started")
+    # Start async task
+    task_id = str(uuid.uuid4())
+    state.tasks[task_id] = TaskInfo(
+        task_id=task_id,
+        status=TaskStatus.PENDING,
+        message="File uploaded. Queued for processing...",
+    )
 
-    except Exception as e:
-        logger.error(f"Error processing uploaded file: {e}", exc_info=True)
-        # Cleanup if we failed before starting task
-        if temp_file and os.path.exists(temp_file):
-            try:
-                os.remove(temp_file)
-            except Exception as cleanup_error:
-                logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
-        if subtitle_file and os.path.exists(subtitle_file):
-            try:
-                os.remove(subtitle_file)
-            except Exception as cleanup_error:
-                logger.warning(f"Failed to cleanup subtitle file: {cleanup_error}")
-        raise HTTPException(status_code=500, detail=str(e))
+    logger.info(f"Starting processing task {task_id} for uploaded file")
+    if state.task_manager is None:
+        raise RuntimeError("Task manager not initialized")
+
+    if temp_file is None:
+        raise HTTPException(status_code=500, detail="Temporary upload file missing")
+
+    state.task_manager.create_task(
+        process_audio_task(
+            task_id,
+            temp_file,
+            video_id,
+            file.filename,
+            download_time=0.0,
+            subtitle_path=subtitle_path,
+            created_by=auth_session.user_id,
+            asset_meta={
+                "filename": file.filename,
+                "original_ext": os.path.splitext(file.filename)[1] or ".mp3",
+            },
+        ),
+        name=f"process_audio_task:{task_id}",
+    )
+
+    return AsyncProcessResponse(task_id=task_id, message="File uploaded, processing started")
