@@ -49,6 +49,7 @@
 - **Backend**: FastAPI (Python 3.11+) + Uvicorn
 - **Frontend**: Vue 3 + Tailwind CSS (CDN-based)
 - **Video Player**: ArtPlayer
+- **Database**: SQLite with SQLModel (production-ready for PostgreSQL migration)
 - **Key Libraries**:
   - openai-whisper (transcription)
   - google-genai (translation via Gemini API)
@@ -59,6 +60,7 @@
   - python-magic (file type/MIME detection)
   - slowapi (rate limiting for API endpoints)
   - limits (rate limiting library for slowapi)
+  - sqlmodel + sqlalchemy (database ORM and models)
 
 ## Architecture
 
@@ -69,11 +71,16 @@ lifecycle.py                   # Startup/shutdown hooks
 middleware.py                  # Request logging + CORS
 rate_limiter.py               # Rate limiting singleton (slowapi wrapper)
 routes.py                      # API endpoints with per-endpoint rate limits
-session_manager.py             # Anonymous auth session management
-processing.py                  # Download/transcribe/analyze/translate pipeline
-uploads.py                     # Upload sessions + sweeper + file helpers
+session_manager.py             # Anonymous auth session management (DB-backed)
+processing.py                  # Download/transcribe/analyze/translate pipeline + DB caching
+uploads.py                     # Upload sessions + sweeper + storage integration
 models.py                      # Pydantic models + UploadSession + AuthSession
 state.py                       # In-memory task store + upload sessions + auth sessions + executors
+db/                            # [NEW] Database module
+  ├── __init__.py
+  ├── engine.py               # Database engine (SQLite setup)
+  ├── models.py               # SQLModel models (User, Asset, SubtitleTrack)
+  └── crud.py                # CRUD operations
 services_registry.py           # Service initialization + whisper lock (initialized on startup)
 settings.py                    # Centralized environment settings loader
 validators.py                  # Upload file validation (size/type/mime)
@@ -94,7 +101,14 @@ services/
   ├── aligner.py               # Timestamp alignment & calibration
   ├── translator.py            # Gemini translation
   ├── subtitle_linearizer.py   # Scrolling subtitle deduplication
-  └── video_utils.py           # Video utilities
+  ├── video_utils.py           # Video utilities
+  └── storage/               # [NEW] Storage abstraction layer
+      ├── __init__.py
+      ├── base.py             # BaseStorage abstract class
+      └── local.py            # LocalStorage implementation (hash-based dirs)
+data/                           # [NEW] Persistent data (git ignored)
+  ├── shadow.db            # SQLite database
+  └── storage/             # File storage (hash-prefixed directories)
 ```
 
 ### Frontend Structure (`/frontend`)
@@ -110,10 +124,13 @@ manifest.json                 # PWA config
 ### Standard Pipeline (No User Subtitle)
 ```
 Input (YouTube URL or File)
-  → Download audio/video (downloader.py)
+  → Check cache (SubtitleTrack DB)
+  → [Cache hit] Return cached result
+  → [Cache miss] Download audio/video (downloader.py)
   → Whisper transcription with word timestamps (transcriber.py)
   → Japanese morphological analysis + furigana (analyzer.py)
   → Batch translate to Chinese (translator.py)
+  → Save to DB (SubtitleTrack table)
   → Return segments with interactive words
   → Frontend displays with click-to-seek
 ```
@@ -121,13 +138,16 @@ Input (YouTube URL or File)
 ### Pipeline with User Subtitle
 ```
 Input (File + User SRT Subtitle)
-  → Whisper transcription for timing reference (transcriber.py)
+  → Check cache (SubtitleTrack DB)
+  → [Cache hit] Return cached result
+  → [Cache miss] Whisper transcription for timing reference (transcriber.py)
   → Load user subtitle (transcriber.py)
   → Deduplicate scrolling subtitles (subtitle_linearizer.py)
   → Check similarity between AI and user subtitle (warns if < threshold)
   → Align & calibrate user subtitle with AI timestamps (aligner.py)
   → Japanese morphological analysis + furigana (analyzer.py)
   → Batch translate to Chinese (translator.py)
+  → Save to DB (SubtitleTrack table)
   → Return segments (no word-level timestamps, only segment-level)
   → Frontend displays with click-to-seek
 ```
@@ -206,7 +226,49 @@ Input (File + User SRT Subtitle)
 
 ## Data Models
 
-### TaskInfo (for async task tracking)
+### Database Models (Persistent Storage)
+
+#### User
+```python
+{
+  id: UUID,  # Primary key
+  username: Optional[str],  # Explicit login (null for guests)
+  password_hash: Optional[str],  # Hashed password
+  is_admin: bool,  # Upload permission control
+  created_at: DateTime,
+}
+```
+
+#### Asset
+```python
+{
+  id: UUID,  # Primary key
+  type: Enum,  # "youtube" or "upload"
+  identifier: str,  # YouTube ID or file SHA256 (unique index)
+  storage_path: Optional[str],  # Only for UPLOAD type
+  meta: Optional[dict],  # Title, duration, thumbnail URL
+  created_by: UUID,  # FK -> User.id
+  created_at: DateTime,
+}
+```
+
+#### SubtitleTrack
+```python
+{
+  id: UUID,  # Primary key
+  asset_id: UUID,  # FK -> Asset.id
+  track_type: Enum,  # "raw" or "processed"
+  source: Enum,  # "user_upload" or "ai_generated"
+  language: str,  # ISO 639-1 (ja, zh, en)
+  content: dict,  # JSON or SRT text
+  is_default: bool,
+  created_at: DateTime,
+}
+```
+
+### In-Memory Models (Session Management)
+
+#### TaskInfo (for async task tracking)
 ```python
 {
   task_id: str,
@@ -218,7 +280,7 @@ Input (File + User SRT Subtitle)
 }
 ```
 
-### ProcessingMetrics
+#### ProcessingMetrics
 ```python
 {
   download_time: float,  # Seconds (0.0 for uploaded files)
@@ -229,7 +291,7 @@ Input (File + User SRT Subtitle)
 }
 ```
 
-### VideoResponse
+#### VideoResponse
 ```python
 {
   video_id: str,
@@ -237,11 +299,11 @@ Input (File + User SRT Subtitle)
   segments: List[Segment],
   metrics: Optional[ProcessingMetrics],  # None if processing failed
   has_word_timestamps: bool,  # False when using user-provided subtitles
-  warnings: List[str]  # Warnings about subtitle similarity, etc.
+  warnings: List[str],  # Warnings about subtitle similarity, etc.
 }
 ```
 
-### Segment
+#### Segment
 ```python
 {
   words: List[Word],
@@ -251,7 +313,7 @@ Input (File + User SRT Subtitle)
 }
 ```
 
-### Word
+#### Word
 ```python
 {
   text: str,
@@ -261,19 +323,22 @@ Input (File + User SRT Subtitle)
 }
 ```
 
-### AuthSession (for anonymous upload authentication)
+#### AuthSession (for anonymous upload authentication)
 ```python
 {
   session_id: str,  # UUID for session identification
   ip_address: str,  # IP address of session creator
   created_at: float,  # Unix timestamp
   expires_at: float,  # Unix timestamp (1 hour TTL by default)
+  user_id: UUID,  # Links to DB User (persistent)
   upload_count: int,  # Number of uploads initiated (max 5)
   total_size: int,  # Total bytes uploaded (max 500MB)
 }
 ```
 
 ## Environment Variables (.env)
+- `DATABASE_URL` - Database connection string (default: sqlite:///./data/shadow.db)
+- `STORAGE_ROOT_DIR` - Root directory for file storage (default: data/storage)
 - `WHISPER_DEVICE` - GPU/CPU selection (cuda/cpu/None for auto, default: None)
 - `WHISPER_FP16` - Half-precision inference (true/false, default: false)
 - `WHISPER_MODEL_SIZE` - Model size (tiny/base/small/medium/large, default: base)
@@ -304,7 +369,15 @@ Input (File + User SRT Subtitle)
 7. **PWA**: Offline support via Service Worker, installable app
 
 ## Important Implementation Details
-- **Stateless Architecture**: No database, in-memory task storage only
+- **Persistent Architecture**: Database-based storage with SQLite (easily upgradable to PostgreSQL via DATABASE_URL env var)
+- **Repository Pattern**: `backend/db/crud.py` isolates business logic from database implementation
+- **SQLModel Typing**: CRUD query clauses are cast for Pyright compatibility without changing runtime behavior
+- **Storage Abstraction**: `backend/services/storage/` provides unified interface for local and future cloud storage
+- **Hash-Based Storage**: Files stored in `data/storage/{prefix}/{identifier}` where prefix is first 2 chars of hash
+- **Result Caching**: Processing results cached in SubtitleTrack table; checks cache before processing
+- **Translation Guard**: Any translation failure (timeout/error/missing key) aborts processing and skips persistence
+- **Guest User Auto-Creation**: Session creation automatically generates User record in DB
+- **Deduplication**: Asset table uses unique constraint on (type, identifier) for fast duplicate detection
 - **Async Processing**: Long-running tasks use background processing with task IDs
 - **Settings**: Environment settings are centralized in `settings.py` and loaded once via `get_settings()`
 - **Thread Pool**: A single shared `ThreadPoolExecutor` is used for CPU-bound tasks and translation batching
@@ -327,7 +400,7 @@ Input (File + User SRT Subtitle)
   - All other endpoints: 60/minute (default)
   - Rate limiter uses IP address as key, returns HTTP 429 when limit exceeded
 - **Anonymous Authentication**: Upload endpoints require an anonymous session (via `/api/session`)
-  - Client stores `session_id` and sends via `X-Session-Id` header with configurable limits:
+  - Client stores `session_id` and sends it via `X-Session-Id` header with configurable limits:
     - Max 5 uploads per session
     - Max 500MB total upload size per session
     - Session TTL: 1 hour (configurable)

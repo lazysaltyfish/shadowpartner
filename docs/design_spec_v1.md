@@ -1,7 +1,10 @@
-# ShadowPartner 后端系统改进详细设计书 (v1.0)
+# ShadowPartner 后端系统改进详细设计书 (v1.1)
 
 ## 1. 概要 (Overview)
 本设计旨在将 ShadowPartner 从基于内存的临时处理系统迁移到基于持久化存储的生产级系统。核心目标是实现数据的持久化、处理结果的缓存复用，并构建一个支持未来多用户扩展的基础架构。
+
+**v1.1 更新说明 (2026-01-12):**
+调整架构设计，移除 `Project` 表，采用基于 `Asset` 和 `SubtitleTrack` 的“结果缓存”模式。任务状态（Task State）保持在内存中管理，仅最终处理结果持久化。
 
 ## 2. 架构设计原则 (Architecture Principles)
 
@@ -33,6 +36,7 @@
 
 #### 3.1.2 Asset (视频资产)
 核心资源表。根据 `source_type` 决定是否存储实体文件。
+**(Unique Constraint: `type` + `identifier`)**
 
 | 字段名 | 类型 | 必填 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -43,8 +47,9 @@
 | `meta` | JSON | No | 标题, 时长, 封面URL等 |
 | `created_by` | UUID | Yes | FK -> User.id (上传者/触发者) |
 
-#### 3.1.3 SubtitleTrack (字幕轨)
-管理关联到 Asset 的所有文本资源。前端直接通过 `PROCESSED` 类型的 Track 获取数据。
+#### 3.1.3 SubtitleTrack (字幕轨 & 缓存结果)
+管理关联到 Asset 的所有文本资源。**同时作为处理结果的缓存表**。
+前端直接通过 `PROCESSED` 类型的 Track 获取数据。
 
 | 字段名 | 类型 | 必填 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -88,7 +93,7 @@ backend/
 ├── db/                     # [NEW] 数据库相关
 │   ├── __init__.py
 │   ├── engine.py           # 数据库连接 (SQLite setup)
-│   ├── models.py           # SQLModel 定义 (User, Asset, Project)
+│   ├── models.py           # SQLModel 定义 (User, Asset, SubtitleTrack)
 │   └── crud.py             # 基础 CRUD 操作
 ├── services/
 │   ├── storage/            # [NEW] 存储服务
@@ -114,19 +119,24 @@ backend/
 
 ### 4.2 上传流程 (Upload Flow)
 1.  **Upload Start**: 计算文件 Hash (客户端算或后端流式算)。
-2.  **Check Duplicate**: 查询 `Asset` 表是否存在该 Hash。
-    *   **命中**: 直接关联现有的 `Asset.id`，实现“秒传”。
-    *   **未命中**: 调用 `StorageService.save()` 写入磁盘，并在 `Asset` 表创建记录。
-3.  **Create Project**: 创建 `Project` 记录，状态为 `PENDING`。
+2.  **Check Cache/Duplicate**:
+    *   查询 `Asset` 表是否存在该 Hash。
+    *   如果存在，进一步检查 `SubtitleTrack` 是否有 `PROCESSED` 的结果。
+    *   **命中缓存**: 直接返回缓存结果，跳过上传和处理。
+    *   **未命中**: 调用 `StorageService.save()` 写入磁盘，并在 `Asset` 表创建/更新记录。
+3.  **Task Creation**: 创建内存中的 `TaskInfo`，状态为 `PENDING`，准备处理。
 
 ### 4.3 处理流程 (Process Flow)
 1.  用户请求处理 (YouTube URL 或 Uploaded File)。
-2.  检查 `Project` 表中是否已有 **相同 Asset ID** 且 **相同 Config** 且 **Status=COMPLETED** 的记录。
-    *   **命中缓存**: 直接返回 `Project.result`。
+2.  **Check Result Cache**:
+    *   通过 Identifier (YouTube ID 或 File Hash) 查询 DB。
+    *   检查是否存在关联的 `SubtitleTrack` (Type=PROCESSED, IsDefault=True)。
+    *   **命中缓存**: 
+        *   创建立即完成的 Task，返回 `SubtitleTrack.content`。
     *   **未命中**: 
-        *   创建新 `Project` (Status=PROCESSING)。
-        *   触发后台 Task。
-        *   Task 完成后更新 `Project` 的 result 和 status。
+        *   创建新 Task (Status=PROCESSING) 并存入内存 `state.tasks`。
+        *   触发后台处理流程。
+        *   处理完成后，**将结果写入 `SubtitleTrack` 表**，并更新内存 Task 状态。
 
 ## 5. 执行计划 (Implementation Steps)
 
@@ -134,12 +144,15 @@ backend/
     *   引入 `sqlmodel` 和 `alembic` 依赖。
     *   创建 `backend/db` 模块和 `backend/services/storage` 模块。
 2.  **数据迁移**:
-    *   定义 Models。
+    *   定义 Models (User, Asset, SubtitleTrack)。
     *   配置 SQLite 引擎。
 3.  **重构 Upload Service**:
-    *   修改 `uploads.py` 使用 `StorageService` 和 `Asset` 表。
+    *   修改 `uploads.py` 使用 `StorageService`。
+    *   集成 `Asset` 表的去重逻辑。
 4.  **重构 Process Pipeline**:
-    *   修改 `processing.py`，不再依赖内存 Task 字典，改为更新 DB 中的 `Project` 状态。
+    *   修改 `processing.py`。
+    *   **移除 `Project` 表依赖**，改为检查 `SubtitleTrack` 缓存。
+    *   实现处理结果持久化到 `SubtitleTrack`。
 5.  **清理**:
-    *   移除 `state.py` 中的大部分内存字典。
+    *   移除 `state.py` 中的大部分内存字典 (保留 `tasks` 用于进度追踪)。
     *   移除 `temp/` 目录的重度依赖 (仅用于 ffmpeg 转码中间过程，不存源文件)。

@@ -21,6 +21,7 @@ Thumbs.db
 # Project Specific - Backend
 backend/bin/
 backend/temp/
+backend/data/
 *.mp3
 *.webm
 *.m4a
