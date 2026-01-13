@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import Header, HTTPException, Request
 
 import state
+from db.models import User
 from models import AuthSession
 from settings import get_settings
 from utils.logger import get_logger
@@ -18,8 +19,8 @@ settings = get_settings()
 AUTH_SESSION_SWEEP_SECONDS = 60
 
 
-def create_session(ip_address: str) -> AuthSession:
-    """Create a new anonymous authentication session."""
+def create_session(ip_address: str, user: User) -> AuthSession:
+    """Create a new anonymous authentication session with Guest User record."""
     session_id = str(uuid.uuid4())
     created_at = time.time()
     expires_at = created_at + settings.auth_session_ttl_seconds
@@ -29,10 +30,11 @@ def create_session(ip_address: str) -> AuthSession:
         ip_address=ip_address,
         created_at=created_at,
         expires_at=expires_at,
+        user_id=user.id,
     )
 
     state.auth_sessions[session_id] = session
-    logger.info(f"Created auth session: {session_id} for IP: {ip_address}")
+    logger.info(f"Created auth session: {session_id} for IP: {ip_address}, user_id: {user.id}")
     return session
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, List, Optional
@@ -47,6 +48,7 @@ class AuthSession:
     ip_address: str
     created_at: float
     expires_at: float
+    user_id: uuid.UUID  # Links to DB User
     upload_count: int = 0
     total_size: int = 0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
