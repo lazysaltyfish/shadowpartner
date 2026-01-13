@@ -42,11 +42,6 @@ def client():
 @pytest.fixture
 def admin_client(client):
     """Create a client with admin session."""
-    # First login as admin
-    response = client.post(
-        "/api/admin/login", json={"username": "test_admin", "password": "test_pass"}
-    )
-
     # Mock admin credentials to bypass env var check
     with patch(
         "session_manager.get_settings",
@@ -55,36 +50,32 @@ def admin_client(client):
         response = client.post(
             "/api/admin/login", json={"username": "test_admin", "password": "test_pass"}
         )
-
-    if response.status_code == 200:
+        assert response.status_code == 200, f"Admin login failed: {response.json()}"
         data = response.json()
         client.headers = {"X-Admin-Session-Id": data["session_id"]}
-    else:
-        # For tests where env vars are set
-        response = client.post("/api/admin/login", json={"username": "admin", "password": "admin"})
-        if response.status_code == 200:
-            data = response.json()
-            client.headers = {"X-Admin-Session-Id": data["session_id"]}
 
     return client
 
 
 @pytest.fixture
 def test_user(client):
-    """Create a test user with assets."""
+    """Create a test user with assets. Returns user_id (UUID) to avoid detached session issues."""
+    # Use unique identifiers per test run to avoid UNIQUE constraint violations
+    unique_suffix = str(uuid.uuid4())[:8]
     with get_session() as db:
         user = get_or_create_guest_user(db, "127.0.0.1")
-        user.username = "test_user"
+        user.username = f"test_user_{unique_suffix}"
         db.commit()
         db.refresh(user)
+        user_id = user.id  # Capture ID before session closes
 
         # Create some assets
         for i in range(3):
             asset = Asset(
                 type=AssetType.UPLOAD,
-                identifier=f"test_hash_{i}",
-                storage_path=f"/tmp/test_{i}.mp4",
-                created_by=user.id,
+                identifier=f"test_hash_{unique_suffix}_{i}",
+                storage_path=f"/tmp/test_{unique_suffix}_{i}.mp4",
+                created_by=user_id,
             )
             db.add(asset)
             db.flush()
@@ -102,18 +93,21 @@ def test_user(client):
                 db.add(track)
 
         db.commit()
-        return user
+        return user_id
 
 
 # ==================== Admin Authentication Tests ====================
 
 
-def test_admin_login_success(client, monkeypatch):
+def test_admin_login_success(client):
     """Test admin login with valid credentials."""
-    monkeypatch.setenv("ADMIN_USERNAME", "admin")
-    monkeypatch.setenv("ADMIN_PASSWORD", "admin123")
-
-    response = client.post("/api/admin/login", json={"username": "admin", "password": "admin123"})
+    with patch(
+        "session_manager.get_settings",
+        return_value=Mock(admin_username="admin", admin_password="admin123"),
+    ):
+        response = client.post(
+            "/api/admin/login", json={"username": "admin", "password": "admin123"}
+        )
 
     assert response.status_code == 200
     data = response.json()
@@ -123,12 +117,15 @@ def test_admin_login_success(client, monkeypatch):
     assert isinstance(data["expires_at"], int)
 
 
-def test_admin_login_invalid_credentials(client, monkeypatch):
+def test_admin_login_invalid_credentials(client):
     """Test admin login with invalid credentials."""
-    monkeypatch.setenv("ADMIN_USERNAME", "admin")
-    monkeypatch.setenv("ADMIN_PASSWORD", "admin123")
-
-    response = client.post("/api/admin/login", json={"username": "admin", "password": "wrong"})
+    with patch(
+        "session_manager.get_settings",
+        return_value=Mock(admin_username="admin", admin_password="admin123"),
+    ):
+        response = client.post(
+            "/api/admin/login", json={"username": "admin", "password": "wrong"}
+        )
 
     assert response.status_code == 401
     assert "Invalid admin credentials" in response.json()["detail"]
@@ -174,7 +171,6 @@ def test_list_users_as_admin(admin_client, test_user):
     user = users[0]
     assert "id" in user
     assert "username" in user
-    assert "is_admin" in user
     assert "created_at" in user
     assert "assets_count" in user
 
@@ -198,7 +194,7 @@ def test_list_users_pagination(admin_client, test_user):
 
 def test_delete_user_success(admin_client, test_user):
     """Test deleting a user."""
-    response = admin_client.delete(f"/api/admin/users/{test_user.id}")
+    response = admin_client.delete(f"/api/admin/users/{test_user}")
 
     assert response.status_code == 200
     assert "deleted successfully" in response.json()["message"]
@@ -224,11 +220,11 @@ def test_delete_user_invalid_id(admin_client):
 def test_delete_user_cascades_to_assets(admin_client, test_user):
     """Test that deleting a user also deletes their assets."""
     # Delete user
-    admin_client.delete(f"/api/admin/users/{test_user.id}")
+    admin_client.delete(f"/api/admin/users/{test_user}")
 
     # Verify assets are deleted
     with get_session() as db:
-        remaining_assets = db.query(Asset).filter(Asset.created_by == test_user.id).all()
+        remaining_assets = db.query(Asset).filter(Asset.created_by == test_user).all()
         assert len(remaining_assets) == 0
 
 
@@ -273,7 +269,7 @@ def test_list_assets_pagination(admin_client, test_user):
 def test_delete_asset_success(admin_client, test_user):
     """Test deleting an asset."""
     with get_session() as db:
-        asset = db.query(Asset).filter(Asset.created_by == test_user.id).first()
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
         asset_id = asset.id
 
     response = admin_client.delete(f"/api/admin/assets/{asset_id}")
@@ -293,7 +289,7 @@ def test_delete_asset_not_found(admin_client):
 def test_delete_asset_cascades_to_tracks(admin_client, test_user):
     """Test that deleting an asset also deletes subtitle tracks."""
     with get_session() as db:
-        asset = db.query(Asset).filter(Asset.created_by == test_user.id).first()
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
         track_count_before = len(asset.subtitle_tracks)
         asset_id = asset.id
 
@@ -349,7 +345,7 @@ def test_list_subtitle_tracks_pagination(admin_client, test_user):
 def test_delete_subtitle_track_success(admin_client, test_user):
     """Test deleting a subtitle track."""
     with get_session() as db:
-        asset = db.query(Asset).filter(Asset.created_by == test_user.id).first()
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
         track = db.query(SubtitleTrack).filter(SubtitleTrack.asset_id == asset.id).first()
         track_id = track.id
 
@@ -378,13 +374,17 @@ def test_delete_subtitle_track_invalid_id(admin_client):
 # ==================== Session Management Tests ====================
 
 
-def test_expired_admin_session(client, monkeypatch):
+def test_expired_admin_session(client):
     """Test that expired admin sessions are rejected."""
-    monkeypatch.setenv("ADMIN_USERNAME", "admin")
-    monkeypatch.setenv("ADMIN_PASSWORD", "admin123")
-
-    # Login and get session
-    response = client.post("/api/admin/login", json={"username": "admin", "password": "admin123"})
+    # Login and get session with mocked credentials
+    with patch(
+        "session_manager.get_settings",
+        return_value=Mock(admin_username="admin", admin_password="admin123"),
+    ):
+        response = client.post(
+            "/api/admin/login", json={"username": "admin", "password": "admin123"}
+        )
+    assert response.status_code == 200
     data = response.json()
     session_id = data["session_id"]
 

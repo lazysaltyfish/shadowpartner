@@ -238,7 +238,7 @@ Input (File + User SRT Subtitle)
 ### Admin User Management (NEW)
 - `GET /api/admin/users` - List all users
   - Requires: `X-Admin-Session-Id` header
-  - Returns: `[{ id, username, is_admin, created_at, assets_count }, ...]`
+  - Returns: `[{ id, username, created_at, assets_count }, ...]`
   - Supports pagination via `limit` and `offset` query params
 - `DELETE /api/admin/users/{user_id}` - Delete user and all their assets
   - Requires: `X-Admin-Session-Id` header
@@ -273,7 +273,6 @@ Input (File + User SRT Subtitle)
   id: UUID,  # Primary key
   username: Optional[str],  # Explicit login (null for guests)
   password_hash: Optional[str],  # Hashed password
-  is_admin: bool,  # Upload permission control
   created_at: DateTime,
 }
 ```

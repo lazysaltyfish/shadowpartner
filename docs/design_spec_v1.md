@@ -31,7 +31,6 @@
 | `id` | UUID | Yes | 主键 |
 | `username` | String | No | 显式登录用 |
 | `password_hash` | String | No | 显式登录用 |
-| `is_admin` | Bool | Yes | **上传权限控制**。默认False |
 | `created_at` | DateTime | Yes | |
 
 #### 3.1.2 Asset (视频资产)

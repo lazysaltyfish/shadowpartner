@@ -40,7 +40,6 @@ class AdminLoginResponse(BaseModel):
 class UserResponse(BaseModel):
     id: str
     username: Optional[str]
-    is_admin: bool
     created_at: str
     assets_count: int
 
@@ -141,7 +140,6 @@ async def list_users(
             user_response = UserResponse(
                 id=str(user.id),
                 username=user.username,
-                is_admin=user.is_admin,
                 created_at=user.created_at.isoformat(),
                 assets_count=len(user.assets),
             )

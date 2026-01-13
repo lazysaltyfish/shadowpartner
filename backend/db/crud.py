@@ -31,7 +31,6 @@ def get_or_create_guest_user(session: Session, ip_address: str) -> User:
     """
     user = User(
         username=f"guest_{ip_address}",
-        is_admin=False,
         created_at=datetime.utcnow(),
     )
     session.add(user)

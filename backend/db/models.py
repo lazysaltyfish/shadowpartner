@@ -35,7 +35,6 @@ class User(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     username: Optional[str] = Field(default=None, max_length=100, index=True)
     password_hash: Optional[str] = Field(default=None, max_length=255)
-    is_admin: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     # Relationships
