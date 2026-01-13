@@ -54,11 +54,23 @@ def _parse_float(name: str, default: float) -> float:
         raise ValueError(f"Invalid float for {name}: {raw}") from exc
 
 
+def _parse_optional_float(name: str) -> Optional[float]:
+    raw = _get_env(name)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid float for {name}: {raw}") from exc
+
+
 @dataclass(frozen=True)
 class Settings:
     whisper_device: Optional[str]
     whisper_fp16: bool
     whisper_model_size: str
+    whisper_condition_on_previous_text: bool
+    whisper_hallucination_silence_threshold: Optional[float]
     subtitle_similarity_threshold: float
     gemini_api_key: Optional[str]
     gemini_model_id: str
@@ -91,6 +103,10 @@ def get_settings() -> Settings:
         whisper_device=_get_env("WHISPER_DEVICE"),
         whisper_fp16=_parse_bool("WHISPER_FP16", False),
         whisper_model_size=_get_env("WHISPER_MODEL_SIZE") or "base",
+        whisper_condition_on_previous_text=_parse_bool("WHISPER_CONDITION_ON_PREVIOUS_TEXT", False),
+        whisper_hallucination_silence_threshold=_parse_optional_float(
+            "WHISPER_HALLUCINATION_SILENCE_THRESHOLD"
+        ),
         subtitle_similarity_threshold=_parse_float("SUBTITLE_SIMILARITY_THRESHOLD", 0.1),
         gemini_api_key=_get_env("GEMINI_API_KEY"),
         gemini_model_id=_get_env("GEMINI_MODEL_ID") or "gemini-3-flash-preview",

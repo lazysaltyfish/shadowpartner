@@ -1,9 +1,11 @@
 import os
 import re
+from typing import Any
 
 import torch
 import whisper
 
+from settings import get_settings
 from utils.logger import get_logger
 from utils.path_setup import setup_local_bin_path
 
@@ -132,9 +134,19 @@ class AudioTranscriber:
         # Ensure we are using absolute path for safety
         audio_path = os.path.abspath(audio_path)
 
-        options = {"word_timestamps": True, "fp16": self.fp16}
+        settings = get_settings()
+
+        options: dict[str, Any] = {
+            "word_timestamps": True,
+            "fp16": self.fp16,
+            "condition_on_previous_text": settings.whisper_condition_on_previous_text,
+        }
         if language:
             options["language"] = language
+        if settings.whisper_hallucination_silence_threshold is not None:
+            options["hallucination_silence_threshold"] = (
+                settings.whisper_hallucination_silence_threshold
+            )
 
         logger.info(f"Starting transcription for: {audio_path}")
         result = self.model.transcribe(audio_path, **options)

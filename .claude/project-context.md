@@ -381,6 +381,8 @@ Input (File + User SRT Subtitle)
 - `WHISPER_DEVICE` - GPU/CPU selection (cuda/cpu/None for auto, default: None)
 - `WHISPER_FP16` - Half-precision inference (true/false, default: false)
 - `WHISPER_MODEL_SIZE` - Model size (tiny/base/small/medium/large, default: base)
+- `WHISPER_CONDITION_ON_PREVIOUS_TEXT` - Whether Whisper conditions on previous text (true/false, default: false). Setting to false reduces hallucinations and trailing text repetition, especially for Japanese content at end of audio files.
+- `WHISPER_HALLUCINATION_SILENCE_THRESHOLD` - Silence threshold in seconds to skip when hallucination is detected (optional, default: None). Only used when word_timestamps is enabled.
 - `GEMINI_API_KEY` - Google Gemini API key (required for translation)
 - `GEMINI_MODEL_ID` - Gemini model (default: gemini-3-flash-preview)
 - `TRANSLATE_BATCH_CHUNK_SIZE` - Translation batch size (default: 50)
