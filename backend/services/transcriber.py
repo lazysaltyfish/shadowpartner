@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Any
+from typing import Any, Dict, Optional, Tuple, cast
 
 import torch
 import whisper
@@ -121,9 +121,16 @@ class AudioTranscriber:
             logger.error(f"Error loading Whisper model: {e}", exc_info=True)
             self.model = None
 
-    def transcribe(self, audio_path: str, language: str = None):
+    def transcribe(self, audio_path: str, language: Optional[str] = None):
         """
         Transcribes audio and returns segments with word timestamps.
+
+        Returns:
+            dict: Result with keys:
+                - 'segments': List of transcription segments
+                - 'text': Full transcription text
+                - 'language': Detected language code (ISO 639-1)
+                - 'language_probs': Dict of language -> probability scores
         """
         if self.model is None:
             raise Exception("Whisper model failed to load.")
@@ -151,6 +158,52 @@ class AudioTranscriber:
         logger.info(f"Starting transcription for: {audio_path}")
         result = self.model.transcribe(audio_path, **options)
         logger.info(f"Transcription completed: {len(result.get('segments', []))} segments")
+
+        # Extract language detection probabilities
+        # Run language detection to get full probability distribution
+        try:
+            audio = whisper.load_audio(audio_path)
+            audio = whisper.pad_or_trim(audio)
+            mel = whisper.log_mel_spectrogram(audio).to(self.model.device)
+
+            # detect_language returns (detected_lang, probability_dict)
+            # Type cast to handle LSP type inference issues
+            lang_detection_result = cast(
+                Tuple[str, Dict[str, float]], self.model.detect_language(mel)
+            )
+
+            # Extract probability dict from the tuple
+            probs = lang_detection_result[1]
+
+            # Convert to regular dict (from torch tensor if needed)
+            language_probs: Dict[str, float] = {}
+            for lang, prob in probs.items():
+                # Safely handle both torch tensor and regular float types
+                prob_tensor = getattr(prob, "item", None)
+                if callable(prob_tensor):
+                    prob_value = float(prob_tensor())
+                else:
+                    prob_value = float(prob)
+                language_probs[str(lang)] = prob_value  # type: ignore[arg-type]
+
+            result["language_probs"] = language_probs
+
+            # Ensure language field is set from detection result
+            if "language" not in result or result["language"] is None:
+                detected_lang = lang_detection_result[0]
+                result["language"] = detected_lang
+
+            detected_confidence = language_probs.get(str(result["language"]), 0.0)
+            logger.info(
+                f"Detected language: {result['language']} "
+                f"with confidence: {detected_confidence:.2%}"
+            )
+
+        except Exception as e:
+            logger.warning(f"Failed to detect language probabilities: {e}")
+            result["language_probs"] = {}
+            if "language" not in result or result["language"] is None:
+                result["language"] = language or "ja"
 
         return result
 

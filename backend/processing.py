@@ -205,6 +205,8 @@ def save_subtitle_to_db(
     storage_path: Optional[str] = None,
     meta: Optional[dict] = None,
     created_by: Optional[uuid.UUID] = None,
+    detected_language: Optional[str] = None,
+    language_probs: Optional[Dict[str, float]] = None,
 ):
     """Save processed subtitle to database.
 
@@ -216,6 +218,8 @@ def save_subtitle_to_db(
         storage_path: Storage path for uploaded files
         meta: Optional asset metadata
         created_by: User ID who created the asset
+        detected_language: Detected language code from Whisper
+        language_probs: Language detection probabilities from Whisper
     """
     with get_session() as db:
         if asset_type is None:
@@ -269,11 +273,18 @@ def save_subtitle_to_db(
             "warnings": video_response.warnings,
         }
 
+        # Store language detection results in content
+        if language_probs is not None:
+            content["language_detection"] = {
+                "detected_language": detected_language or "ja",
+                "language_probs": language_probs,
+            }
+
         track = SubtitleTrack(
             asset_id=asset.id,
             track_type=SubtitleTrackType.PROCESSED,
             source=source,
-            language="ja",
+            language=detected_language or "ja",
             content=content,
             is_default=True,
         )
@@ -585,6 +596,10 @@ async def process_audio_task(
             except Exception as e:
                 raise RuntimeError("Failed to save upload to storage") from e
 
+        # Extract language detection results from Whisper transcription
+        detected_language = gen_result.get("language", "ja")
+        language_probs = gen_result.get("language_probs", None)
+
         try:
             save_subtitle_to_db(
                 video_id,
@@ -594,6 +609,8 @@ async def process_audio_task(
                 storage_path=storage_path,
                 meta=asset_meta,
                 created_by=created_by,
+                detected_language=detected_language,
+                language_probs=language_probs,
             )
         except Exception:
             if storage_path and storage is not None:

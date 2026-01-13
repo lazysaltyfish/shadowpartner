@@ -297,10 +297,25 @@ Input (File + User SRT Subtitle)
   asset_id: UUID,  # FK -> Asset.id
   track_type: Enum,  # "raw" or "processed"
   source: Enum,  # "user_upload" or "ai_generated"
-  language: str,  # ISO 639-1 (ja, zh, en)
-  content: dict,  # JSON or SRT text
+  language: str,  # ISO 639-1 (ja, zh, en) - auto-detected by Whisper
+  content: dict,  # JSON with segments, metrics, and optional language_detection metadata
   is_default: bool,
   created_at: DateTime,
+}
+```
+
+**Content Structure** (processed tracks):
+```python
+{
+  "title": str,
+  "segments": [...],  # Word-level segments with translations
+  "metrics": {...},   # Processing metrics
+  "has_word_timestamps": bool,
+  "warnings": [...],
+  "language_detection": {  # [NEW] Whisper language detection results
+    "detected_language": str,  # ISO 639-1 code
+    "language_probs": {str: float},  # All language probabilities
+  }
 }
 ```
 
