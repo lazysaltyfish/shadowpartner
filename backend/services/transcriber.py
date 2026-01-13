@@ -16,6 +16,49 @@ logger = get_logger(__name__)
 setup_local_bin_path()
 
 
+def clean_whisper_text(text: str) -> str:
+    """
+    Remove bracket annotations from Whisper output.
+
+    Whisper inserts bracket-annotated non-speech events in the transcription,
+    such as [applause], [laughter], [music]. These are not useful for
+    shadow reading practice and should be removed.
+
+    Args:
+        text: Original Whisper text
+
+    Returns:
+        Cleaned text with all [...] and 【...】 content removed
+
+    Examples:
+        - "こんにちは[音楽]世界" → "こんにちは世界"
+        - "今日[拍手]は" → "今日 は"
+        - "Hello[laughter]World" → "Hello World"
+        - "正常テキスト" → "正常テキスト"
+    """
+    if not text:
+        return text
+
+    # Iterate until no more brackets are found
+    # Handle cases where brackets might appear multiple times
+    while True:
+        # Remove [...] and 【...】 and full-width ［...］ content
+        # Use non-greedy matching *? to handle each bracket pair separately
+        cleaned = re.sub(r"\[.*?\]", "", text)
+        cleaned = re.sub(r"【.*?】", "", cleaned)
+        cleaned = re.sub(r"［.*?］", "", cleaned)
+
+        # If no changes, cleaning is complete
+        if cleaned == text:
+            break
+        text = cleaned
+
+    # Clean up extra spaces (may exist around removed brackets)
+    cleaned = re.sub(r"\s+", " ", text).strip()
+
+    return cleaned
+
+
 def parse_srt_time(time_str: str) -> float:
     """Parse SRT timestamp (HH:MM:SS,mmm) to seconds."""
     # Handle both comma and period as decimal separator
@@ -205,7 +248,58 @@ class AudioTranscriber:
             if "language" not in result or result["language"] is None:
                 result["language"] = language or "ja"
 
+        # Clean Whisper output: remove bracket annotations like [掌声], [音楽], etc.
+        self._clean_segments(result)
+
         return result
+
+    def _clean_segments(self, result: dict) -> None:
+        """
+        Remove Whisper's bracket annotations from segments.
+
+        Whisper inserts bracket-annotated non-speech events like [applause],
+        [laughter], [music] which are not useful for shadow reading practice.
+
+        Args:
+            result: Whisper transcription result dict (modified in-place)
+        """
+        segments = result.get("segments", [])
+        if not segments:
+            return
+
+        cleaned_segments = []
+        for segment in segments:
+            # Clean segment text
+            original_text = segment.get("text", "")
+            cleaned_text = clean_whisper_text(original_text)
+
+            # Skip empty segments after cleaning
+            if not cleaned_text:
+                logger.debug(f"Skipping empty segment after cleaning: {original_text[:50]}...")
+                continue
+
+            # Clean individual word texts
+            cleaned_words = []
+            for word in segment.get("words", []):
+                if isinstance(word, dict):
+                    cleaned_word_text = clean_whisper_text(word.get("word", ""))
+                    if cleaned_word_text:
+                        word["word"] = cleaned_word_text
+                        cleaned_words.append(word)
+                elif hasattr(word, "word"):
+                    # Handle object with word attribute
+                    cleaned_word_text = clean_whisper_text(word.word)
+                    if cleaned_word_text:
+                        word.word = cleaned_word_text
+                        cleaned_words.append(word)
+
+            segment["text"] = cleaned_text
+            if cleaned_words:
+                segment["words"] = cleaned_words
+
+            cleaned_segments.append(segment)
+
+        result["segments"] = cleaned_segments
 
     def load_subtitle(self, subtitle_path: str = None, subtitle_content: str = None) -> dict:
         """
