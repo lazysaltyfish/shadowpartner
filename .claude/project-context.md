@@ -32,6 +32,11 @@
   cd backend && uv run pyright
   ```
 
+### Testing Requirements
+- **Pre-commit Requirement**: All tests MUST pass before committing code changes.
+- **Test Command**: Run `cd backend && uv run pytest tests/` to execute all tests.
+- **Strict Requirement**: AI assistants MUST run tests and ensure they all pass before proposing any commit.
+
 ### Git & Commit Standards
 - **Atomic Commits**: Each commit should focus on a single logical change or feature.
 - **Message Format**:

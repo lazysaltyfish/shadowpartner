@@ -57,7 +57,10 @@ class Asset(SQLModel, table=True):
 
     # Relationships
     created_by_user: Optional["User"] = Relationship(back_populates="assets")
-    subtitle_tracks: List["SubtitleTrack"] = Relationship(back_populates="asset")
+    subtitle_tracks: List["SubtitleTrack"] = Relationship(
+        back_populates="asset",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
 
 
 class SubtitleTrack(SQLModel, table=True):
