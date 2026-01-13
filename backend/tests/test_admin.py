@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from db import get_session, init_db
+from db import get_session
 from db.crud import get_or_create_guest_user
 from db.models import Asset, AssetType, SubtitleSource, SubtitleTrack, SubtitleTrackType
 from main import create_app
@@ -14,14 +14,9 @@ from main import create_app
 
 @pytest.fixture(scope="function")
 def client():
-    """Create a test client with a fresh database for each test."""
     app = create_app()
     client = TestClient(app)
 
-    # Initialize database
-    init_db()
-
-    # Override the get_session dependency to use test database
     def override_get_session():
         from db.engine import SessionLocal
 
@@ -35,14 +30,11 @@ def client():
 
     yield client
 
-    # Clean up
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
 def admin_client(client):
-    """Create a client with admin session."""
-    # Mock admin credentials to bypass env var check
     with patch(
         "session_manager.get_settings",
         return_value=Mock(admin_username="test_admin", admin_password="test_pass"),
@@ -59,17 +51,14 @@ def admin_client(client):
 
 @pytest.fixture
 def test_user(client):
-    """Create a test user with assets. Returns user_id (UUID) to avoid detached session issues."""
-    # Use unique identifiers per test run to avoid UNIQUE constraint violations
     unique_suffix = str(uuid.uuid4())[:8]
     with get_session() as db:
         user = get_or_create_guest_user(db, "127.0.0.1")
         user.username = f"test_user_{unique_suffix}"
         db.commit()
         db.refresh(user)
-        user_id = user.id  # Capture ID before session closes
+        user_id = user.id
 
-        # Create some assets
         for i in range(3):
             asset = Asset(
                 type=AssetType.UPLOAD,
@@ -80,7 +69,6 @@ def test_user(client):
             db.add(asset)
             db.flush()
 
-            # Create subtitle tracks
             for j in range(2):
                 track = SubtitleTrack(
                     asset_id=asset.id,
