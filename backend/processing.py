@@ -5,12 +5,18 @@ import difflib
 import os
 import re
 import time
+import uuid
+from collections import Counter
 from functools import partial
 from typing import Dict, List, Optional
 
 import services_registry as services
 import state
+from db import get_session
+from db.crud import get_asset_by_identifier, get_cached_result
+from db.models import Asset, AssetType, SubtitleSource, SubtitleTrack, SubtitleTrackType
 from models import ProcessingMetrics, Segment, TaskStatus, VideoResponse, Word
+from services.video_utils import get_video_source
 from uploads import release_upload_session
 from utils.logger import get_logger
 
@@ -37,6 +43,7 @@ def _ensure_services_initialized():
             services.aligner,
             services.translator,
             services.subtitle_linearizer,
+            services.storage,
         ]
     ):
         raise RuntimeError(
@@ -117,6 +124,166 @@ def check_subtitle_similarity(
     return warnings
 
 
+def is_translation_failure(text: str) -> bool:
+    markers = (
+        "[翻译错误",
+        "[翻译超时",
+        "[翻译缺失",
+        "[需要配置 GEMINI_API_KEY]",
+        "[翻译失败",
+    )
+    return any(marker in text for marker in markers)
+
+
+def get_translation_failure_reason(text: str) -> str:
+    if "[需要配置 GEMINI_API_KEY]" in text:
+        return "missing_api_key"
+    if "[翻译超时" in text:
+        return "timeout"
+    if "[翻译错误" in text:
+        return "error"
+    if "[翻译缺失" in text:
+        return "missing"
+    if "[翻译失败" in text:
+        return "failed"
+    return "unknown"
+
+
+def _truncate(text: str, max_len: int = 120) -> str:
+    if len(text) <= max_len:
+        return text
+    return f"{text[:max_len]}..."
+
+
+def check_cache(asset_identifier: str) -> Optional[VideoResponse]:
+    """Check database for cached processing result.
+
+    Args:
+        asset_identifier: Asset identifier (YouTube ID or file hash)
+
+    Returns:
+        VideoResponse if cache hit, None otherwise
+    """
+    with get_session() as db:
+        cached_content = get_cached_result(db, asset_identifier)
+        if not cached_content:
+            return None
+
+        logger.info(f"Cache hit for asset: {asset_identifier}")
+
+        segments_data = cached_content.get("segments", [])
+        segments = []
+        for seg_dict in segments_data:
+            words = [Word(**w) for w in seg_dict.get("words", [])]
+            segments.append(
+                Segment(
+                    words=words,
+                    translation=seg_dict.get("translation", ""),
+                    start=seg_dict.get("start", 0.0),
+                    end=seg_dict.get("end", 0.0),
+                )
+            )
+
+        metrics_dict = cached_content.get("metrics")
+        metrics = ProcessingMetrics(**metrics_dict) if metrics_dict else None
+
+        return VideoResponse(
+            video_id=asset_identifier,
+            title=cached_content.get("title", ""),
+            segments=segments,
+            metrics=metrics,
+            has_word_timestamps=cached_content.get("has_word_timestamps", True),
+            warnings=cached_content.get("warnings", []),
+        )
+
+
+def save_subtitle_to_db(
+    asset_identifier: str,
+    video_response: VideoResponse,
+    source: SubtitleSource,
+    asset_type: Optional[AssetType] = None,
+    storage_path: Optional[str] = None,
+    meta: Optional[dict] = None,
+    created_by: Optional[uuid.UUID] = None,
+):
+    """Save processed subtitle to database.
+
+    Args:
+        asset_identifier: Asset identifier (YouTube ID or file hash)
+        video_response: Processed video response with segments
+        source: Source type (AI_GENERATED or USER_UPLOAD)
+        asset_type: Asset type (UPLOAD or YOUTUBE)
+        storage_path: Storage path for uploaded files
+        meta: Optional asset metadata
+        created_by: User ID who created the asset
+    """
+    with get_session() as db:
+        if asset_type is None:
+            asset_type = (
+                AssetType.UPLOAD
+                if get_video_source(asset_identifier) == "upload"
+                else AssetType.YOUTUBE
+            )
+
+        asset = get_asset_by_identifier(db, asset_type, asset_identifier)
+
+        if not asset:
+            asset = Asset(
+                type=asset_type,
+                identifier=asset_identifier,
+                storage_path=storage_path,
+                meta=meta,
+                created_by=created_by,
+            )
+            db.add(asset)
+        else:
+            updated = False
+            if storage_path and asset.storage_path != storage_path:
+                asset.storage_path = storage_path
+                updated = True
+            if meta:
+                asset.meta = {**(asset.meta or {}), **meta}
+                updated = True
+            if created_by and not asset.created_by:
+                asset.created_by = created_by
+                updated = True
+            if updated:
+                db.add(asset)
+
+        segments_data = []
+        for seg in video_response.segments:
+            segments_data.append(
+                {
+                    "words": [w.model_dump() for w in seg.words],
+                    "translation": seg.translation,
+                    "start": seg.start,
+                    "end": seg.end,
+                }
+            )
+
+        content = {
+            "title": video_response.title,
+            "segments": segments_data,
+            "metrics": video_response.metrics.model_dump() if video_response.metrics else None,
+            "has_word_timestamps": video_response.has_word_timestamps,
+            "warnings": video_response.warnings,
+        }
+
+        track = SubtitleTrack(
+            asset_id=asset.id,
+            track_type=SubtitleTrackType.PROCESSED,
+            source=source,
+            language="ja",
+            content=content,
+            is_default=True,
+        )
+        db.add(track)
+        db.commit()
+        db.refresh(track)
+
+        logger.info(f"Saved subtitle track to DB for asset_id: {asset.id}")
+
+
 async def process_audio_task(
     task_id: str,
     file_path: str,
@@ -124,6 +291,8 @@ async def process_audio_task(
     title: str,
     download_time: float = 0.0,
     subtitle_path: Optional[str] = None,
+    created_by: Optional[uuid.UUID] = None,
+    asset_meta: Optional[dict] = None,
 ):
     """
     Process audio/video file and generate learning segments.
@@ -334,6 +503,32 @@ async def process_audio_task(
         translations = await services.translator.translate_batch(raw_texts)
         translation_time = time.time() - t0
 
+        failed_indices = [i for i, text in enumerate(translations) if is_translation_failure(text)]
+        failed_count = len(failed_indices)
+        if failed_count:
+            reason_counts = Counter(
+                get_translation_failure_reason(translations[i]) for i in failed_indices
+            )
+            sample_details = []
+            for i in failed_indices[:5]:
+                sample_details.append(
+                    f"idx={i} reason={get_translation_failure_reason(translations[i])} "
+                    f"jp='{_truncate(raw_texts[i])}' zh='{_truncate(translations[i])}'"
+                )
+            logger.error(
+                "Task %s: Translation failed for %s/%s segments; reasons=%s; samples=%s",
+                task_id,
+                failed_count,
+                len(translations),
+                dict(reason_counts),
+                " | ".join(sample_details),
+            )
+            raise RuntimeError(
+                "Translation failed; skipping persistence "
+                f"({failed_count}/{len(translations)}). "
+                f"Reasons: {dict(reason_counts)}. See logs for samples."
+            )
+
         # Map translations back (handle potential length mismatch gracefully)
         for i, trans in enumerate(translations):
             if i < len(final_segments):
@@ -370,6 +565,48 @@ async def process_audio_task(
             has_word_timestamps=has_word_timestamps,
             warnings=warnings,
         )
+
+        source = SubtitleSource.USER_UPLOAD if subtitle_path else SubtitleSource.AI_GENERATED
+        asset_type = (
+            AssetType.UPLOAD if get_video_source(video_id) == "upload" else AssetType.YOUTUBE
+        )
+        storage_path = None
+        storage = services.storage
+
+        if asset_type == AssetType.UPLOAD:
+            if storage is None:
+                raise RuntimeError("Storage service not initialized")
+            if not file_path or not os.path.exists(file_path):
+                raise RuntimeError("Upload file missing; cannot persist result")
+            try:
+                with open(file_path, "rb") as f:
+                    storage_path = await storage.save(f, video_id)
+                    logger.info(f"Task {task_id}: Saved file to storage: {storage_path}")
+            except Exception as e:
+                raise RuntimeError("Failed to save upload to storage") from e
+
+        try:
+            save_subtitle_to_db(
+                video_id,
+                final_response,
+                source,
+                asset_type=asset_type,
+                storage_path=storage_path,
+                meta=asset_meta,
+                created_by=created_by,
+            )
+        except Exception:
+            if storage_path and storage is not None:
+                try:
+                    await storage.delete(storage_path)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "Task %s: Failed to cleanup stored file %s: %s",
+                        task_id,
+                        storage_path,
+                        cleanup_error,
+                    )
+            raise
 
         update_task(task_id, TaskStatus.COMPLETED, 100, "Completed", result=final_response)
 
