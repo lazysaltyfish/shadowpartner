@@ -71,18 +71,19 @@ lifecycle.py                   # Startup/shutdown hooks
 middleware.py                  # Request logging + CORS
 rate_limiter.py               # Rate limiting singleton (slowapi wrapper)
 routes.py                      # API endpoints with per-endpoint rate limits
-session_manager.py             # Anonymous auth session management (DB-backed)
+admin_routes.py                # [NEW] Admin management endpoints (auth, CRUD)
+session_manager.py             # Anonymous auth session management (DB-backed) + admin sessions
 processing.py                  # Download/transcribe/analyze/translate pipeline + DB caching
 uploads.py                     # Upload sessions + sweeper + storage integration
-models.py                      # Pydantic models + UploadSession + AuthSession
-state.py                       # In-memory task store + upload sessions + auth sessions + executors
+models.py                      # Pydantic models + UploadSession + AuthSession + AdminLoginRequest
+state.py                       # In-memory task store + upload sessions + auth sessions + admin sessions + executors
 db/                            # [NEW] Database module
   ├── __init__.py
   ├── engine.py               # Database engine (SQLite setup)
   ├── models.py               # SQLModel models (User, Asset, SubtitleTrack)
-  └── crud.py                # CRUD operations
+  └── crud.py                # CRUD operations + admin CRUD functions
 services_registry.py           # Service initialization + whisper lock (initialized on startup)
-settings.py                    # Centralized environment settings loader
+settings.py                    # Centralized environment settings loader (includes ADMIN_USERNAME/PASSWORD)
 validators.py                  # Upload file validation (size/type/mime)
 utils/
   ├── logger.py                # Logging
@@ -93,7 +94,8 @@ tests/                         # Unit tests
   ├── test_calibration.py
   ├── test_subtitle_linearizer.py
   ├── test_subtitle_matching.py
-  └── test_youtube_download.py
+  ├── test_youtube_download.py
+  └── test_admin.py          # [NEW] Admin authentication and CRUD tests
 services/
   ├── downloader.py            # YouTube/file download
   ├── transcriber.py           # Whisper transcription
@@ -223,6 +225,43 @@ Input (File + User SRT Subtitle)
 - `GET /health` - Comprehensive health check
   - Returns: `{ "status": "healthy", "services": {...}, "active_tasks": 0, "pending_transcription": false }`
   - **Rate Limit**: exempt (no limit)
+
+### Admin Authentication (NEW)
+- `POST /api/admin/login` - Admin login
+  - Input: `{ "username": "admin", "password": "..." }`
+  - Returns: `{ "session_id": "uuid", "expires_at": 1234567890 }`
+  - Requires `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment variables
+- `POST /api/admin/logout` - Admin logout
+  - Requires: `X-Admin-Session-Id` header
+  - Invalidates admin session
+
+### Admin User Management (NEW)
+- `GET /api/admin/users` - List all users
+  - Requires: `X-Admin-Session-Id` header
+  - Returns: `[{ id, username, is_admin, created_at, assets_count }, ...]`
+  - Supports pagination via `limit` and `offset` query params
+- `DELETE /api/admin/users/{user_id}` - Delete user and all their assets
+  - Requires: `X-Admin-Session-Id` header
+  - Cascades delete to all user's assets and subtitle tracks
+  - Deletes storage files for uploaded assets
+
+### Admin Asset Management (NEW)
+- `GET /api/admin/assets` - List all assets
+  - Requires: `X-Admin-Session-Id` header
+  - Returns: `[{ id, type, identifier, storage_path, meta, created_by, created_at, subtitle_tracks_count }, ...]`
+  - Supports pagination via `limit` and `offset` query params
+- `DELETE /api/admin/assets/{asset_id}` - Delete asset and all subtitle tracks
+  - Requires: `X-Admin-Session-Id` header
+  - Cascades delete to all asset's subtitle tracks
+  - Deletes storage file if it exists
+
+### Admin Subtitle Track Management (NEW)
+- `GET /api/admin/subtitle-tracks` - List all subtitle tracks
+  - Requires: `X-Admin-Session-Id` header
+  - Returns: `[{ id, asset_id, track_type, source, language, is_default, created_at }, ...]`
+  - Supports pagination via `limit` and `offset` query params
+- `DELETE /api/admin/subtitle-tracks/{track_id}` - Delete subtitle track
+  - Requires: `X-Admin-Session-Id` header
 
 ## Data Models
 
@@ -358,6 +397,8 @@ Input (File + User SRT Subtitle)
 - `AUTH_SESSION_TTL_SECONDS` - Auth session TTL in seconds (default: 3600, 1 hour)
 - `AUTH_SESSION_MAX_UPLOADS` - Max uploads per auth session (default: 5)
 - `AUTH_SESSION_MAX_TOTAL_SIZE` - Max total upload size per session in bytes (default: 524288000, 500MB)
+- `ADMIN_USERNAME` - Admin username for admin panel access (required for admin features)
+- `ADMIN_PASSWORD` - Admin password for admin panel access (required for admin features)
 
 ## Key Features
 1. **Video Input**: YouTube URL or local file upload (drag-and-drop supported)
@@ -367,6 +408,7 @@ Input (File + User SRT Subtitle)
 5. **Subtitle Alignment**: Align AI timestamps with reference subtitles, handle scrolling duplicates
 6. **Interactive Playback**: Word-level highlighting, click-to-seek functionality
 7. **PWA**: Offline support via Service Worker, installable app
+8. **Admin Panel**: Admin interface for managing users, assets, and subtitle tracks (requires ADMIN_USERNAME/PASSWORD)
 
 ## Important Implementation Details
 - **Persistent Architecture**: Database-based storage with SQLite (easily upgradable to PostgreSQL via DATABASE_URL env var)
@@ -408,6 +450,12 @@ Input (File + User SRT Subtitle)
   - Expired sessions automatically cleaned every 60 seconds
   - YouTube URL processing (`/api/process`) accepts `X-Session-Id` when available to count toward session limits
   - Frontend auto-manages session: creates on first upload, reuses if valid, clears on 401 error
+- **Admin Authentication**: Admin panel requires `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment variables
+  - Admin login via `POST /api/admin/login` returns admin session token
+  - Admin session stored in `X-Admin-Session-Id` header for all admin requests
+  - Admin sessions have 24-hour TTL and are cleaned every 5 minutes
+  - Admin can view and delete any user-uploaded content (users, assets, subtitle tracks)
+  - Frontend admin panel at `frontend/admin.html` provides tabbed interface for management
 
 ## Running the Application
 
@@ -430,3 +478,13 @@ python -m http.server 3000
 ```
 
 Access at: http://localhost:3000
+
+**Admin Panel**:
+```bash
+cd backend
+export ADMIN_USERNAME="admin"
+export ADMIN_PASSWORD="your_admin_password"
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Admin panel accessible at: http://localhost:3000/admin.html

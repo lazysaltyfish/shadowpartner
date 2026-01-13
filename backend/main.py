@@ -3,6 +3,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 import settings
+from admin_routes import router as admin_router
 from lifecycle import shutdown_event, startup_event
 from middleware import add_cors_headers, add_security_headers, log_requests
 from rate_limiter import get_limiter
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
     app.middleware("http")(add_security_headers)
     app.middleware("http")(add_cors_headers)
     app.include_router(api_router)
+    app.include_router(admin_router)
     return app
 
 

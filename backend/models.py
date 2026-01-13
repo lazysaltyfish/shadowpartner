@@ -98,3 +98,8 @@ class AsyncProcessResponse(BaseModel):
 class SessionResponse(BaseModel):
     session_id: str
     expires_at: int
+
+
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str

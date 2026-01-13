@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from models import AuthSession, TaskInfo, TaskStatus, UploadSession
 from utils.task_manager import TaskManager
+
+if TYPE_CHECKING:
+    from session_manager import AdminSession
 
 # In-memory task store (Use Redis/DB in production)
 tasks: Dict[str, TaskInfo] = {}
 upload_sessions: Dict[str, UploadSession] = {}
 auth_sessions: Dict[str, AuthSession] = {}
+admin_sessions: Dict[str, "AdminSession"] = {}
 
 # Global thread pool executor for CPU-bound tasks
 executor: Optional[ThreadPoolExecutor] = None
 upload_session_sweeper_task: Optional[asyncio.Task] = None
 auth_session_sweeper_task: Optional[asyncio.Task] = None
+admin_session_sweeper_task: Optional[asyncio.Task] = None
 task_manager: Optional[TaskManager] = None
 
 

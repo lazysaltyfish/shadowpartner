@@ -76,6 +76,8 @@ class Settings:
     auth_session_ttl_seconds: int
     auth_session_max_uploads: int
     auth_session_max_total_size: int
+    admin_username: Optional[str]
+    admin_password: Optional[str]
 
     @property
     def proxy(self) -> Optional[str]:
@@ -108,4 +110,6 @@ def get_settings() -> Settings:
         auth_session_ttl_seconds=_parse_int("AUTH_SESSION_TTL_SECONDS", 3600),
         auth_session_max_uploads=_parse_int("AUTH_SESSION_MAX_UPLOADS", 5),
         auth_session_max_total_size=_parse_int("AUTH_SESSION_MAX_TOTAL_SIZE", 524288000),
+        admin_username=_get_env("ADMIN_USERNAME"),
+        admin_password=_get_env("ADMIN_PASSWORD"),
     )

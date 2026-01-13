@@ -9,7 +9,7 @@ from fastapi import Header, HTTPException, Request
 
 import state
 from db.models import User
-from models import AuthSession
+from models import AdminLoginRequest, AuthSession
 from settings import get_settings
 from utils.logger import get_logger
 
@@ -151,3 +151,138 @@ async def get_current_session(
         raise HTTPException(status_code=401, detail="Invalid or expired session")
 
     return session
+
+
+# ==================== Admin Session Management ====================
+
+
+class AdminSession:
+    """Admin authentication session for management operations."""
+
+    def __init__(self, session_id: str, username: str, expires_at: float):
+        self.session_id = session_id
+        self.username = username
+        self.expires_at = expires_at
+
+
+def validate_admin_login(request: AdminLoginRequest) -> bool:
+    """Validate admin credentials against environment variables.
+
+    Args:
+        request: AdminLoginRequest with username and password
+
+    Returns:
+        True if credentials match admin credentials, False otherwise
+    """
+    settings = get_settings()
+    if not settings.admin_username or not settings.admin_password:
+        logger.warning("Admin credentials not configured in environment")
+        return False
+
+    return (
+        request.username == settings.admin_username and request.password == settings.admin_password
+    )
+
+
+def create_admin_session(username: str, ttl_seconds: int = 86400) -> AdminSession:
+    """Create a new admin session.
+
+    Args:
+        username: Admin username
+        ttl_seconds: Time-to-live in seconds (default: 24 hours)
+
+    Returns:
+        AdminSession object
+    """
+    import uuid
+
+    session_id = str(uuid.uuid4())
+    created_at = time.time()
+    expires_at = created_at + ttl_seconds
+
+    session = AdminSession(session_id=session_id, username=username, expires_at=expires_at)
+    state.admin_sessions[session_id] = session
+    logger.info(f"Created admin session: {session_id} for user: {username}")
+    return session
+
+
+def validate_admin_session(session_id: str) -> Optional[AdminSession]:
+    """Validate admin session and return it if valid, None otherwise.
+
+    Args:
+        session_id: Admin session ID to validate
+
+    Returns:
+        AdminSession if valid, None otherwise
+    """
+    if session_id not in state.admin_sessions:
+        return None
+
+    session = state.admin_sessions[session_id]
+
+    if time.time() > session.expires_at:
+        logger.info(f"Admin session expired: {session_id}")
+        del state.admin_sessions[session_id]
+        return None
+
+    return session
+
+
+def invalidate_admin_session(session_id: str) -> bool:
+    """Invalidate an admin session. Returns True if session existed and was removed.
+
+    Args:
+        session_id: Admin session ID to invalidate
+
+    Returns:
+        True if session was found and removed, False otherwise
+    """
+    if session_id in state.admin_sessions:
+        del state.admin_sessions[session_id]
+        logger.info(f"Invalidated admin session: {session_id}")
+        return True
+    return False
+
+
+async def get_current_admin_session(
+    request: Request, session_id: Optional[str] = Header(None, alias="X-Admin-Session-Id")
+) -> AdminSession:
+    """FastAPI dependency to validate admin session from header.
+
+    Args:
+        request: FastAPI request object
+        session_id: Admin session ID from X-Admin-Session-Id header
+
+    Returns:
+        AdminSession if valid
+
+    Raises:
+        HTTPException 401 if session is missing or invalid
+    """
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Admin session required")
+
+    session = validate_admin_session(session_id)
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid or expired admin session")
+
+    return session
+
+
+async def sweep_admin_sessions():
+    """Periodically clean up expired admin sessions."""
+    ADMIN_SWEEP_SECONDS = 300  # 5 minutes
+    while True:
+        await asyncio.sleep(ADMIN_SWEEP_SECONDS)
+        current_time = time.time()
+        expired_sessions = [
+            session_id
+            for session_id, session in state.admin_sessions.items()
+            if current_time > session.expires_at
+        ]
+
+        for session_id in expired_sessions:
+            del state.admin_sessions[session_id]
+
+        if expired_sessions:
+            logger.info(f"Cleaned up {len(expired_sessions)} expired admin sessions")
