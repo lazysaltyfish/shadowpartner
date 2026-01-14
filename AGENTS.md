@@ -12,7 +12,7 @@
 > Keep this document concise but accurate to minimize token usage in future conversations.
 
 ## Project Overview
-**ShadowPartner (影子跟读)** is a PWA for Japanese language learners that processes YouTube videos to generate interactive subtitles with word-level timing, furigana, and Chinese translations.
+**ShadowPartner (影子跟读)** is a PWA for Japanese language learners that processes YouTube videos and uploaded videos to generate interactive subtitles with word-level timing, furigana, and Chinese translations.
 
 ## Development Standards
 
