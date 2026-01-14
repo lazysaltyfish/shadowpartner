@@ -32,6 +32,11 @@
   cd backend && uv run pyright
   ```
 
+### Frontend Player Requirements
+- **Dual Player Support**: The frontend supports two video players: **YouTube IFrame API** (for YouTube URLs) and **ArtPlayer** (for uploaded local files).
+- **Strict Requirement**: Any changes to player-related functionality (playback controls, seeking, looping, time tracking, etc.) MUST work identically on BOTH players.
+- **Testing**: When modifying player code, you MUST test with both a YouTube video AND a local uploaded file to ensure consistent behavior.
+
 ### Testing Requirements
 - **Pre-commit Requirement**: All tests MUST pass before committing code changes.
 - **Test Command**: Run `cd backend && uv run pytest tests/` to execute all tests.

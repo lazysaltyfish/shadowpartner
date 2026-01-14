@@ -1,4 +1,4 @@
-const { createApp, ref, onMounted, onUnmounted, nextTick, computed } = Vue;
+const { createApp, ref, reactive, onMounted, onUnmounted, nextTick, computed } = Vue;
 
 createApp({
     setup() {
@@ -27,6 +27,23 @@ createApp({
         const sessionId = ref(null);
         const SESSION_STORAGE_KEY = 'shadowpartner_session_id';
         const SESSION_HEADER_NAME = 'X-Session-Id';
+
+        const dictation = reactive({
+            active: false,
+            segmentIndex: 0,
+            mode: 'listen',
+            loop: false,
+            userInput: '',
+            isComposing: false,
+            isPlaying: false,
+            answersByIndex: {},
+            statusByIndex: {},
+            diffResult: [],
+            currentScore: null,
+            totalAttempts: 0,
+            correctCount: 0,
+        });
+        const targetPauseTime = ref(null);
 
         // AbortController for canceling requests on page unload
         let abortController = new AbortController();
@@ -337,16 +354,15 @@ createApp({
                 playVideo: () => art.play(),
                 pauseVideo: () => art.pause(),
                 destroy: () => art.destroy(),
-                // Reference to the actual ArtPlayer instance
                 artInstance: art,
                 isNative: true
             };
 
             console.log('[ArtPlayer] Initialized with volume:', art.volume);
+            startPolling();
         };
 
         const startPolling = () => {
-             // Clear existing interval if any
              if (window._pollInterval) clearInterval(window._pollInterval);
 
              window._pollInterval = setInterval(() => {
@@ -355,6 +371,14 @@ createApp({
                     if (Math.abs(time - currentTime.value) > 0.1) {
                         currentTime.value = time;
                         updateActiveWords();
+                    }
+                    
+                    if (dictation.active && dictation.isPlaying) {
+                        const segment = videoData.value?.segments?.[dictation.segmentIndex];
+                        if (segment && time >= segment.end) {
+                            player.value.seekTo(Math.max(0, segment.start - 0.3), true);
+                            player.value.playVideo();
+                        }
                     }
                 }
             }, 100);
@@ -416,6 +440,154 @@ createApp({
                 player.value.seekTo(time, true);
                 if (player.value.playVideo) player.value.playVideo();
             }
+        };
+
+        const dictationProgress = computed(() => {
+            if (!videoData.value?.segments?.length) return 0;
+            return Math.round((dictation.segmentIndex / videoData.value.segments.length) * 100);
+        });
+
+        const currentDictationText = computed(() => {
+            const segment = videoData.value?.segments?.[dictation.segmentIndex];
+            if (!segment?.words) return '';
+            return segment.words.map(w => w.text).join('');
+        });
+
+        const getCurrentSegment = () => {
+            if (!videoData.value?.segments) return null;
+            return videoData.value.segments[dictation.segmentIndex];
+        };
+
+        const getSegmentText = (segment) => {
+            if (!segment?.words) return '';
+            return segment.words.map(w => w.text).join('');
+        };
+
+        const playCurrentSegment = () => {
+            const segment = getCurrentSegment();
+            if (!segment || !player.value) return;
+            
+            player.value.seekTo(Math.max(0, segment.start - 0.3), true);
+            player.value.playVideo();
+            dictation.isPlaying = true;
+        };
+
+        const stopDictationPlayback = () => {
+            if (player.value) {
+                player.value.pauseVideo();
+            }
+            dictation.isPlaying = false;
+        };
+
+        const toggleDictationPlayback = () => {
+            if (dictation.isPlaying) {
+                stopDictationPlayback();
+            } else {
+                playCurrentSegment();
+            }
+        };
+
+        const gotoPrevSegment = () => {
+            if (dictation.segmentIndex > 0) {
+                dictation.segmentIndex--;
+                resetDictationInput();
+            }
+        };
+
+        const gotoNextSegment = () => {
+            if (!videoData.value?.segments) return;
+            if (dictation.segmentIndex < videoData.value.segments.length - 1) {
+                dictation.segmentIndex++;
+                resetDictationInput();
+            }
+        };
+
+        const resetDictationInput = () => {
+            dictation.userInput = '';
+            dictation.mode = 'listen';
+            dictation.diffResult = [];
+            dictation.currentScore = null;
+        };
+
+        const normalizeJapanese = (str) => {
+            return str
+                .normalize('NFKC')
+                .replace(/[\s\u3000]/g, '')
+                .replace(/[。、！？「」『』（）・]/g, '');
+        };
+
+        const katakanaToHiragana = (str) => {
+            return str.replace(/[\u30A1-\u30F6]/g, (match) => {
+                return String.fromCharCode(match.charCodeAt(0) - 0x60);
+            });
+        };
+
+        const generateDiff = (correct, user) => {
+            const normCorrect = katakanaToHiragana(normalizeJapanese(correct));
+            const normUser = katakanaToHiragana(normalizeJapanese(user));
+            
+            const result = [];
+            let userIdx = 0;
+            
+            for (const char of correct) {
+                const normChar = katakanaToHiragana(normalizeJapanese(char));
+                if (!normChar) {
+                    result.push({ text: char, status: 'correct' });
+                    continue;
+                }
+                
+                if (userIdx < normUser.length && normUser[userIdx] === normChar) {
+                    result.push({ text: char, status: 'correct' });
+                    userIdx++;
+                } else {
+                    result.push({ text: char, status: 'missing' });
+                }
+            }
+            
+            const correctCount = result.filter(r => r.status === 'correct').length;
+            const totalChars = result.filter(r => normalizeJapanese(r.text)).length;
+            const score = totalChars > 0 ? Math.round((correctCount / totalChars) * 100) : 0;
+            
+            return { diff: result, score };
+        };
+
+        const checkAnswer = () => {
+            const segment = getCurrentSegment();
+            if (!segment) return;
+            
+            const correctText = getSegmentText(segment);
+            const { diff, score } = generateDiff(correctText, dictation.userInput);
+            
+            dictation.diffResult = diff;
+            dictation.currentScore = score;
+            dictation.mode = 'review';
+            dictation.totalAttempts++;
+            
+            if (score >= 80) {
+                dictation.correctCount++;
+                dictation.statusByIndex[dictation.segmentIndex] = 'correct';
+            } else {
+                dictation.statusByIndex[dictation.segmentIndex] = 'wrong';
+            }
+            dictation.answersByIndex[dictation.segmentIndex] = dictation.userInput;
+        };
+
+        const skipCurrentSegment = () => {
+            dictation.statusByIndex[dictation.segmentIndex] = 'skipped';
+            gotoNextSegment();
+        };
+
+        const handleDictationMainAction = () => {
+            if (dictation.mode === 'review') {
+                gotoNextSegment();
+            } else {
+                checkAnswer();
+            }
+        };
+
+        const handleDictationEnter = (event) => {
+            if (dictation.isComposing) return;
+            handleDictationMainAction();
         };
 
         const handleFileUpload = (event) => {
@@ -788,7 +960,19 @@ createApp({
             apiBaseUrl,
             manualUpdateBaseUrl,
             checkBackendHealth,
-            taskStatus
+            taskStatus,
+            dictation,
+            targetPauseTime,
+            dictationProgress,
+            currentDictationText,
+            playCurrentSegment,
+            stopDictationPlayback,
+            toggleDictationPlayback,
+            gotoPrevSegment,
+            gotoNextSegment,
+            skipCurrentSegment,
+            handleDictationMainAction,
+            handleDictationEnter
         };
     }
 }).mount('#app');
