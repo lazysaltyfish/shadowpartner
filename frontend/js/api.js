@@ -123,6 +123,22 @@ const API = {
     },
 
     /**
+     * Get list of processed assets for home page
+     * @param {number} limit - Max items to return
+     * @param {number} offset - Items to skip
+     * @returns {Promise<{items: Array, total: number}>}
+     */
+    async getAssets(limit = 20, offset = 0) {
+        const response = await fetch(
+            `${this.baseUrl}/api/assets/list?limit=${limit}&offset=${offset}`
+        );
+        if (!response.ok) {
+            throw new Error(`Failed to load assets: ${response.status}`);
+        }
+        return await response.json();
+    },
+
+    /**
      * Get stream URL for uploaded assets
      * @param {string} assetId - Asset UUID
      * @returns {string}

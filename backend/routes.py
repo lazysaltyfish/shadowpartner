@@ -22,7 +22,12 @@ import services_registry
 import session_manager
 import state
 from db import get_session
-from db.crud import get_asset_by_id, get_or_create_guest_user, get_subtitle_track_by_asset
+from db.crud import (
+    get_all_assets,
+    get_asset_by_id,
+    get_or_create_guest_user,
+    get_subtitle_track_by_asset,
+)
 from db.models import AssetType, SubtitleTrackType
 from models import (
     AsyncProcessResponse,
@@ -557,15 +562,42 @@ async def upload_video(
 
 @router.get("/api/assets/{asset_id}")
 @limiter.limit("60/minute")
-async def get_asset(request: Request, asset_id: str):
-    """Get asset details with subtitle data (public endpoint for play page).
+async def get_asset(request: Request, asset_id: str, limit: int = 20, offset: int = 0):
+    """Get asset details or list all processed assets.
 
     Args:
-        asset_id: Asset UUID
+        asset_id: Asset UUID or "list" for listing all processed assets
+        limit: Maximum number of assets to return (only for list)
+        offset: Number of assets to skip (only for list)
 
     Returns:
-        Asset details with processed subtitle segments
+        Asset details with processed subtitle segments, or list of assets
     """
+    # Handle list request
+    if asset_id == "list":
+        with get_session() as db:
+            assets, total = get_all_assets(db, limit=limit, offset=offset, processed_only=True)
+            items = []
+            for asset in assets:
+                track = get_subtitle_track_by_asset(
+                    db, asset.id, SubtitleTrackType.PROCESSED, is_default=True
+                )
+                title = track.content.get("title", "") if track else ""
+                thumbnail = None
+                if asset.type == AssetType.YOUTUBE:
+                    thumbnail = f"https://img.youtube.com/vi/{asset.identifier}/mqdefault.jpg"
+                items.append(
+                    {
+                        "id": str(asset.id),
+                        "type": asset.type.value,
+                        "title": title,
+                        "thumbnail": thumbnail,
+                        "created_at": asset.created_at.isoformat(),
+                    }
+                )
+            return {"items": items, "total": total}
+
+    # Handle single asset request
     try:
         asset_uuid = uuid.UUID(asset_id)
     except ValueError:
@@ -577,7 +609,9 @@ async def get_asset(request: Request, asset_id: str):
             raise HTTPException(status_code=404, detail="Asset not found")
 
         # Get processed subtitle track
-        track = get_subtitle_track_by_asset(db, asset.id, SubtitleTrackType.PROCESSED)
+        track = get_subtitle_track_by_asset(
+            db, asset.id, SubtitleTrackType.PROCESSED, is_default=True
+        )
         if not track:
             raise HTTPException(status_code=404, detail="No processed subtitle found")
 

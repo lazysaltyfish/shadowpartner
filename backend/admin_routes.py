@@ -199,7 +199,7 @@ async def list_assets(
         List of AssetResponse objects
     """
     with get_session() as db:
-        assets = get_all_assets(db, limit=limit, offset=offset)
+        assets, _total = get_all_assets(db, limit=limit, offset=offset)
         result = []
         for asset in assets:
             asset_response = AssetResponse(

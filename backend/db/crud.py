@@ -84,17 +84,19 @@ def get_asset_by_id(session: Session, asset_id: uuid.UUID) -> Optional[Asset]:
 
 
 def get_subtitle_track_by_asset(
-    session: Session, asset_id: uuid.UUID, track_type: SubtitleTrackType
+    session: Session,
+    asset_id: uuid.UUID,
+    track_type: SubtitleTrackType,
+    is_default: Optional[bool] = None,
 ) -> Optional[SubtitleTrack]:
     """Get subtitle track by asset and type."""
-    return (
-        session.query(SubtitleTrack)
-        .filter(
-            _as_clause(SubtitleTrack.asset_id == asset_id),
-            _as_clause(SubtitleTrack.track_type == track_type),
-        )
-        .first()
+    query = session.query(SubtitleTrack).filter(
+        _as_clause(SubtitleTrack.asset_id == asset_id),
+        _as_clause(SubtitleTrack.track_type == track_type),
     )
+    if is_default is not None:
+        query = query.filter(_as_clause(cast(Any, SubtitleTrack.is_default).is_(is_default)))
+    return query.first()
 
 
 def get_cached_result(session: Session, asset_identifier: str) -> Optional[tuple[dict, uuid.UUID]]:
@@ -114,7 +116,9 @@ def get_cached_result(session: Session, asset_identifier: str) -> Optional[tuple
     if not asset:
         return None
 
-    track = get_subtitle_track_by_asset(session, asset.id, SubtitleTrackType.PROCESSED)
+    track = get_subtitle_track_by_asset(
+        session, asset.id, SubtitleTrackType.PROCESSED, is_default=True
+    )
     if not track:
         return None
 
@@ -209,24 +213,30 @@ def delete_user(session: Session, user_id: uuid.UUID) -> bool:
     return True
 
 
-def get_all_assets(session: Session, limit: int = 100, offset: int = 0) -> List[Asset]:
+def get_all_assets(
+    session: Session, limit: int = 100, offset: int = 0, processed_only: bool = False
+) -> tuple[List[Asset], int]:
     """Get all assets with pagination and user info.
 
     Args:
         session: Database session
         limit: Maximum number of assets to return
         offset: Number of assets to skip
+        processed_only: If True, only return assets with default processed subtitle tracks
 
     Returns:
-        List of Asset objects
+        Tuple of (assets, total_count)
     """
-    return (
-        session.query(Asset)
-        .order_by(desc(cast(Any, Asset.created_at)))
-        .limit(limit)
-        .offset(offset)
-        .all()
-    )
+    query = session.query(Asset)
+    if processed_only:
+        query = query.join(SubtitleTrack).filter(
+            _as_clause(SubtitleTrack.track_type == SubtitleTrackType.PROCESSED),
+            _as_clause(cast(Any, SubtitleTrack.is_default).is_(True)),
+        )
+        query = query.distinct()
+    total = query.count()
+    assets = query.order_by(desc(cast(Any, Asset.created_at))).limit(limit).offset(offset).all()
+    return assets, total
 
 
 def get_asset_with_tracks(session: Session, asset_id: uuid.UUID) -> Optional[Asset]:

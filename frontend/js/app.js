@@ -34,6 +34,12 @@ createApp({
         const playPageLoading = ref(false);
         const playPageError = ref(null);
 
+        // Home page state
+        const homeAssets = ref([]);
+        const homeLoading = ref(false);
+        const homeHasMore = ref(true);
+        const HOME_PAGE_SIZE = 20;
+
         const dictation = reactive({
             active: false,
             segmentIndex: 0,
@@ -218,6 +224,29 @@ createApp({
 
         // Route handlers
         /**
+         * Load assets for home page grid.
+         * @param {boolean} append - If true, append to existing list (infinite scroll)
+         */
+        const loadHomeAssets = async (append = false) => {
+            if (homeLoading.value) return;
+            homeLoading.value = true;
+            try {
+                const offset = append ? homeAssets.value.length : 0;
+                const data = await API.getAssets(HOME_PAGE_SIZE, offset);
+                if (append) {
+                    homeAssets.value = [...homeAssets.value, ...data.items];
+                } else {
+                    homeAssets.value = data.items;
+                }
+                homeHasMore.value = homeAssets.value.length < data.total;
+            } catch (e) {
+                console.error('[Home] Failed to load assets:', e);
+            } finally {
+                homeLoading.value = false;
+            }
+        };
+
+        /**
          * Load asset data for the play page and initialize the player.
          * @param {string} assetId
          * @returns {Promise<void>}
@@ -299,10 +328,11 @@ createApp({
                 // Reset play page state when going to upload
                 playPageData.value = null;
                 playPageError.value = null;
-            } else {
-                // Home page - reset play page state
+            } else if (route === 'home') {
+                // Load home page assets
                 playPageData.value = null;
                 playPageError.value = null;
+                loadHomeAssets();
             }
         };
 
@@ -1194,7 +1224,13 @@ createApp({
             playPageVisibleSegments,
             playPageHasWordTimestamps,
             goHome: () => Router.goHome(),
-            goToUpload: () => Router.goToUpload()
+            goToUpload: () => Router.goToUpload(),
+            goToPlay: (assetId) => Router.goToPlay(assetId),
+            // Home page state
+            homeAssets,
+            homeLoading,
+            homeHasMore,
+            loadMoreAssets: () => loadHomeAssets(true)
         };
     }
 }).mount('#app');

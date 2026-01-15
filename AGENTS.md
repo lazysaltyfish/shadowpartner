@@ -256,10 +256,15 @@ Input (File + User SRT Subtitle)
   - **Rate Limit**: 120 requests per minute (frequent polling)
 
 ### Public Asset Access
-- `GET /api/assets/{asset_id}` - Get asset details for play page
-  - Returns: `{ id, type, identifier, title, segments, has_word_timestamps, created_at }`
+- `GET /api/assets/{asset_id}` - Get asset details or list all processed assets
+  - When `asset_id` is a UUID: Returns single asset details for play page
+    - Returns: `{ id, type, identifier, title, segments, has_word_timestamps, created_at }`
+  - When `asset_id` is `list`: Returns paginated list of processed assets
+    - Query params: `limit` (default 20), `offset` (default 0)
+    - Returns: `{ items: [{ id, type, title, thumbnail, created_at }], total }`
+    - Thumbnail: YouTube uses `https://img.youtube.com/vi/{id}/mqdefault.jpg`, uploads return `null`
+    - Only assets with a default processed subtitle track are included
   - Public endpoint, no authentication required
-  - Used by frontend play page (`#/play/{asset_id}`)
   - **Rate Limit**: 60 requests per minute
 - `GET /api/assets/{asset_id}/stream` - Stream media file
   - Only available for `upload` type assets
@@ -476,11 +481,12 @@ Input (File + User SRT Subtitle)
 7. **PWA**: Offline support via Service Worker, installable app
 8. **Admin Panel**: Admin interface for managing users, assets, and subtitle tracks (requires ADMIN_USERNAME/PASSWORD)
 9. **Play Page Routing**: Dedicated play page via hash routing (`#/play/{asset_id}`), auto-redirect after processing
-10. **Frontend Routing**: Hash-based SPA routing with `/` (home TODO placeholder), `/upload` (upload page), and `/play/{asset_id}` routes
+10. **Frontend Routing**: Hash-based SPA routing with `/` (home video grid), `/upload` (upload page), and `/play/{asset_id}` routes
 
 ## Important Implementation Details
 - **Persistent Architecture**: Database-based storage with SQLite (easily upgradable to PostgreSQL via DATABASE_URL env var)
 - **Repository Pattern**: `backend/db/crud.py` isolates business logic from database implementation
+- **Asset Listing Pagination**: `get_all_assets` returns `(assets, total)` for paginated listings
 - **SQLModel Typing**: CRUD query clauses are cast for Pyright compatibility without changing runtime behavior
 - **Storage Abstraction**: `backend/services/storage/` provides unified interface for local and future cloud storage
 - **Hash-Based Storage**: Files stored in `data/storage/{prefix}/{identifier}` where prefix is first 2 chars of hash
@@ -530,7 +536,9 @@ Input (File + User SRT Subtitle)
   - Frontend admin panel at `frontend/admin.html` provides tabbed interface for management
   - Asset identifiers in the admin assets table open the play page in a new tab
 - **Frontend Routing**: Hash-based SPA routing for page navigation
-  - Routes: `/` (home TODO placeholder), `/upload` (upload page), `/play/{asset_id}` (dedicated play page)
+  - Routes: `/` (home video grid), `/upload` (upload page), `/play/{asset_id}` (dedicated play page)
+  - Home page displays responsive video grid with infinite scroll
+  - Home grid cards navigate to play page on click
   - Auto-redirect to play page after processing completes (when `asset_id` is available)
   - Modular architecture: `router.js`, `api.js`, `player.js`, `subtitles.js`
   - Unified player interface supports both YouTube IFrame API and ArtPlayer
