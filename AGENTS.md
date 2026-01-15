@@ -148,7 +148,7 @@ data/                           # [NEW] Persistent data (git ignored)
 index.html                    # Main HTML with routing support
 js/
   ├── app.js                  # Vue 3 application (main entry)
-  ├── router.js               # Hash router (#/play/{asset_id})
+  ├── router.js               # Hash router (#/, #/upload, #/play/{asset_id})
   ├── api.js                  # API client module
   ├── player.js               # Unified player (YouTube + ArtPlayer)
   ├── subtitles.js            # Subtitle rendering module
@@ -476,6 +476,7 @@ Input (File + User SRT Subtitle)
 7. **PWA**: Offline support via Service Worker, installable app
 8. **Admin Panel**: Admin interface for managing users, assets, and subtitle tracks (requires ADMIN_USERNAME/PASSWORD)
 9. **Play Page Routing**: Dedicated play page via hash routing (`#/play/{asset_id}`), auto-redirect after processing
+10. **Frontend Routing**: Hash-based SPA routing with `/` (home TODO placeholder), `/upload` (upload page), and `/play/{asset_id}` routes
 
 ## Important Implementation Details
 - **Persistent Architecture**: Database-based storage with SQLite (easily upgradable to PostgreSQL via DATABASE_URL env var)
@@ -528,8 +529,8 @@ Input (File + User SRT Subtitle)
   - Storage file deletions resolve relative storage paths via the storage provider (or local hashed path fallback)
   - Frontend admin panel at `frontend/admin.html` provides tabbed interface for management
   - Asset identifiers in the admin assets table open the play page in a new tab
-- **Frontend Routing**: Hash-based SPA routing for play page navigation
-  - Routes: `/` (home/upload), `/play/{asset_id}` (dedicated play page)
+- **Frontend Routing**: Hash-based SPA routing for page navigation
+  - Routes: `/` (home TODO placeholder), `/upload` (upload page), `/play/{asset_id}` (dedicated play page)
   - Auto-redirect to play page after processing completes (when `asset_id` is available)
   - Modular architecture: `router.js`, `api.js`, `player.js`, `subtitles.js`
   - Unified player interface supports both YouTube IFrame API and ArtPlayer

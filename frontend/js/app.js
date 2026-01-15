@@ -29,7 +29,7 @@ createApp({
         const SESSION_HEADER_NAME = 'X-Session-Id';
 
         // Router state
-        const currentRoute = ref('home'); // 'home' | 'play'
+        const currentRoute = ref('home'); // 'home' | 'upload' | 'play'
         const playPageData = ref(null); // Asset data for play page
         const playPageLoading = ref(false);
         const playPageError = ref(null);
@@ -295,8 +295,12 @@ createApp({
 
             if (route === 'play' && params.assetId) {
                 loadPlayPage(params.assetId);
+            } else if (route === 'upload') {
+                // Reset play page state when going to upload
+                playPageData.value = null;
+                playPageError.value = null;
             } else {
-                // Reset play page state when going home
+                // Home page - reset play page state
                 playPageData.value = null;
                 playPageError.value = null;
             }
@@ -1189,7 +1193,8 @@ createApp({
             playPageError,
             playPageVisibleSegments,
             playPageHasWordTimestamps,
-            goHome: () => Router.goHome()
+            goHome: () => Router.goHome(),
+            goToUpload: () => Router.goToUpload()
         };
     }
 }).mount('#app');

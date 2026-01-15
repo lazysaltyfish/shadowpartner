@@ -1,12 +1,12 @@
 const { test, expect } = require('@playwright/test');
 
 test.describe('Home Page', () => {
-  test('should load home page with input form', async ({ page }) => {
+  test('should load home page with TODO placeholder', async ({ page }) => {
     await page.goto('/');
 
-    // Check main elements exist
-    await expect(page.locator('input[placeholder*="YouTube"]')).toBeVisible();
-    await expect(page.locator('button:has-text("开始")')).toBeVisible();
+    // Check TODO placeholder elements exist
+    await expect(page.locator('text=首页开发中')).toBeVisible();
+    await expect(page.locator('button:has-text("前往上传页面")')).toBeVisible();
   });
 
   test('should show backend status indicator', async ({ page }) => {
@@ -23,8 +23,28 @@ test.describe('Home Page', () => {
     expect(hasOnline || hasOffline || hasStatusDot).toBeTruthy();
   });
 
-  test('should have file upload option', async ({ page }) => {
+  test('should navigate to upload page from home', async ({ page }) => {
     await page.goto('/');
+
+    // Click the upload button
+    await page.locator('button:has-text("前往上传页面")').click();
+
+    // Should navigate to upload page
+    await expect(page).toHaveURL(/\/#\/upload$/);
+  });
+});
+
+test.describe('Upload Page', () => {
+  test('should load upload page with input form', async ({ page }) => {
+    await page.goto('/#/upload');
+
+    // Check main elements exist
+    await expect(page.locator('input[placeholder*="YouTube"]')).toBeVisible();
+    await expect(page.locator('button:has-text("开始")')).toBeVisible();
+  });
+
+  test('should have file upload option', async ({ page }) => {
+    await page.goto('/#/upload');
 
     // File input should exist
     const fileInput = page.locator('input[type="file"]').first();
