@@ -510,6 +510,7 @@ Input (File + User SRT Subtitle)
   - `/` and `/health`: exempt (no limit)
   - All other endpoints: 60/minute (default)
   - Rate limiter uses IP address as key, returns HTTP 429 when limit exceeded
+  - Disable limits via `RATE_LIMIT_ENABLED=false` or `python main.py --no-rate-limit` (test runs)
 - **Anonymous Authentication**: Upload endpoints require an anonymous session (via `/api/session`)
   - Client stores `session_id` and sends it via `X-Session-Id` header with configurable limits:
     - Max 5 uploads per session
@@ -547,10 +548,16 @@ export GEMINI_API_KEY="your_key"
 uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+**Backend (test, no rate limits)**:
+```bash
+cd backend
+uv run python main.py --no-rate-limit --port 8000
+```
+
 **Frontend**:
 ```bash
 cd frontend
-python -m http.server 3000
+python3 -m http.server 3000
 ```
 
 Access at: http://localhost:3000
