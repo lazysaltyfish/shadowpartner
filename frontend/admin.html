@@ -204,7 +204,7 @@
                                         {{ asset.type === 'youtube' ? 'YouTube' : 'Upload' }}
                                     </span>
                                 </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" :title="asset.identifier">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 cursor-pointer hover:text-blue-600 hover:underline" :title="asset.identifier" @click="openPlayPage(asset)">
                                     {{ asset.identifier.substring(0, 20) }}{{ asset.identifier.length > 20 ? '...' : '' }}
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" :title="asset.created_by">
@@ -540,7 +540,10 @@
                     }
                 };
 
-                // Watch for tab changes and reload data
+                const openPlayPage = (asset) => {
+                    window.open(`index.html#/play/${asset.id}`, '_blank');
+                };
+
                 // Watch for tab changes and reload data
                 watch(activeTab, () => {
                     if (adminSession.value) {
@@ -572,7 +575,8 @@
                     loadData,
                     confirmDelete,
                     executeDelete,
-                    formatDate
+                    formatDate,
+                    openPlayPage
                 };
             }
         }).mount('#app');

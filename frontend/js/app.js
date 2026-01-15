@@ -303,21 +303,21 @@ createApp({
         };
 
         // Start checking on mount
-        onMounted(async () => {
-            // Wait for health check to complete (sets apiBaseUrl)
-            await checkBackendHealth();
-            // Poll every 30 seconds
-            healthCheckIntervalId = setInterval(checkBackendHealth, 30000);
+        onMounted(() => {
+            // Initialize router immediately (don't wait for health check)
+            Router.onRouteChange = handleRouteChange;
+            Router.init();
+
             // Cleanup on page refresh/close
             window.addEventListener('beforeunload', cleanup);
 
-            // Initialize API module with base URL (after health check sets it)
-            API.setBaseUrl(apiBaseUrl.value);
-            console.log('[App] API base URL set to:', apiBaseUrl.value);
-
-            // Initialize router
-            Router.onRouteChange = handleRouteChange;
-            Router.init();
+            // Health check runs in background (non-blocking)
+            checkBackendHealth().then(() => {
+                API.setBaseUrl(apiBaseUrl.value);
+                console.log('[App] API base URL set to:', apiBaseUrl.value);
+            });
+            // Poll every 30 seconds
+            healthCheckIntervalId = setInterval(checkBackendHealth, 30000);
         });
 
         // Cleanup on unmount
