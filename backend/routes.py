@@ -16,21 +16,25 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from fastapi.responses import StreamingResponse
 
 import services_registry
 import session_manager
 import state
 from db import get_session
-from db.crud import get_or_create_guest_user
+from db.crud import get_asset_by_id, get_or_create_guest_user, get_subtitle_track_by_asset
+from db.models import AssetType, SubtitleTrackType
 from models import (
     AsyncProcessResponse,
     AuthSession,
+    Segment,
     SessionResponse,
     TaskInfo,
     TaskStatus,
     UploadSession,
     VideoRequest,
     VideoResponse,
+    Word,
 )
 from processing import check_cache, download_and_process, process_audio_task
 from rate_limiter import get_limiter
@@ -546,3 +550,160 @@ async def upload_video(
     )
 
     return AsyncProcessResponse(task_id=task_id, message="File uploaded, processing started")
+
+
+# ==================== Public Asset API ====================
+
+
+@router.get("/api/assets/{asset_id}")
+@limiter.limit("60/minute")
+async def get_asset(request: Request, asset_id: str):
+    """Get asset details with subtitle data (public endpoint for play page).
+
+    Args:
+        asset_id: Asset UUID
+
+    Returns:
+        Asset details with processed subtitle segments
+    """
+    try:
+        asset_uuid = uuid.UUID(asset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+
+    with get_session() as db:
+        asset = get_asset_by_id(db, asset_uuid)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        # Get processed subtitle track
+        track = get_subtitle_track_by_asset(db, asset.id, SubtitleTrackType.PROCESSED)
+        if not track:
+            raise HTTPException(status_code=404, detail="No processed subtitle found")
+
+        content = track.content
+        segments_data = content.get("segments", [])
+        segments = [
+            Segment(
+                words=[Word(**w) for w in seg.get("words", [])],
+                translation=seg.get("translation", ""),
+                start=seg.get("start", 0.0),
+                end=seg.get("end", 0.0),
+            )
+            for seg in segments_data
+        ]
+
+        return {
+            "id": str(asset.id),
+            "type": asset.type.value,
+            "identifier": asset.identifier,
+            "title": content.get("title", ""),
+            "segments": [seg.model_dump() for seg in segments],
+            "has_word_timestamps": content.get("has_word_timestamps", True),
+            "created_at": asset.created_at.isoformat(),
+        }
+
+
+@router.get("/api/assets/{asset_id}/stream")
+@limiter.limit("30/minute")
+async def stream_asset(request: Request, asset_id: str):
+    """Stream media file for uploaded assets (public endpoint for play page).
+
+    Supports HTTP Range requests for video seeking.
+
+    Args:
+        asset_id: Asset UUID
+
+    Returns:
+        StreamingResponse with media content
+    """
+    import mimetypes
+    import re
+
+    try:
+        asset_uuid = uuid.UUID(asset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+
+    with get_session() as db:
+        asset = get_asset_by_id(db, asset_uuid)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        # Only upload type assets have local files
+        if asset.type != AssetType.UPLOAD:
+            raise HTTPException(
+                status_code=400,
+                detail="Streaming only available for uploaded files",
+            )
+
+        if not asset.storage_path:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Get storage service and file path
+        storage = services_registry.storage
+        if storage is None:
+            raise HTTPException(status_code=500, detail="Storage service not available")
+
+        full_path = storage.get_full_path(asset.storage_path)
+        if not os.path.exists(full_path):
+            raise HTTPException(status_code=404, detail="File not found in storage")
+
+        # Get file info
+        file_size = os.path.getsize(full_path)
+        ext = asset.meta.get("original_ext", ".mp3") if asset.meta else ".mp3"
+        mime_type, _ = mimetypes.guess_type(f"file{ext}")
+        mime_type = mime_type or "application/octet-stream"
+
+        # Handle Range request for video seeking
+        range_header = request.headers.get("range")
+
+        if range_header:
+            range_match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+            if range_match:
+                start = int(range_match.group(1))
+                end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+                end = min(end, file_size - 1)
+
+                if start >= file_size:
+                    raise HTTPException(status_code=416, detail="Range not satisfiable")
+
+                content_length = end - start + 1
+
+                def iter_range():
+                    with open(full_path, "rb") as f:
+                        f.seek(start)
+                        remaining = content_length
+                        while remaining > 0:
+                            chunk_size = min(8192, remaining)
+                            chunk = f.read(chunk_size)
+                            if not chunk:
+                                break
+                            remaining -= len(chunk)
+                            yield chunk
+
+                return StreamingResponse(
+                    iter_range(),
+                    status_code=206,
+                    media_type=mime_type,
+                    headers={
+                        "Content-Range": f"bytes {start}-{end}/{file_size}",
+                        "Accept-Ranges": "bytes",
+                        "Content-Length": str(content_length),
+                    },
+                )
+
+        # Full file response
+        def iter_file():
+            with open(full_path, "rb") as f:
+                while chunk := f.read(8192):
+                    yield chunk
+
+        return StreamingResponse(
+            iter_file(),
+            media_type=mime_type,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_size),
+            },
+        )

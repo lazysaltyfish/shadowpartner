@@ -9,6 +9,7 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement
 
+import services_registry
 from db.models import Asset, AssetType, SubtitleTrack, SubtitleTrackType, User
 
 # ==================== User CRUD ====================
@@ -16,6 +17,19 @@ from db.models import Asset, AssetType, SubtitleTrack, SubtitleTrackType, User
 
 def _as_clause(value: Any) -> ColumnElement[bool]:
     return cast(ColumnElement[bool], value)
+
+
+def _resolve_storage_path(storage_path: str) -> str:
+    if os.path.isabs(storage_path):
+        return storage_path
+    storage = services_registry.storage
+    if storage is not None:
+        try:
+            return storage.get_full_path(storage_path)
+        except Exception:
+            pass
+    prefix = storage_path[:2] if len(storage_path) >= 2 else "00"
+    return os.path.join("data", "storage", prefix, storage_path)
 
 
 def get_user_by_id(session: Session, user_id: uuid.UUID) -> Optional[User]:
@@ -53,6 +67,19 @@ def get_asset_by_identifier(
     )
 
 
+def get_asset_by_id(session: Session, asset_id: uuid.UUID) -> Optional[Asset]:
+    """Get asset by UUID.
+
+    Args:
+        session: Database session
+        asset_id: Asset UUID
+
+    Returns:
+        Asset if found, None otherwise
+    """
+    return session.get(Asset, asset_id)
+
+
 # ==================== SubtitleTrack CRUD ====================
 
 
@@ -70,7 +97,7 @@ def get_subtitle_track_by_asset(
     )
 
 
-def get_cached_result(session: Session, asset_identifier: str) -> Optional[dict]:
+def get_cached_result(session: Session, asset_identifier: str) -> Optional[tuple[dict, uuid.UUID]]:
     """Check for cached processing result in database.
 
     Args:
@@ -78,7 +105,7 @@ def get_cached_result(session: Session, asset_identifier: str) -> Optional[dict]
         asset_identifier: Asset identifier (YouTube ID or file hash)
 
     Returns:
-        Cached subtitle content dict if exists, None otherwise
+        Tuple of (cached subtitle content dict, asset UUID) if exists, None otherwise
     """
     asset = get_asset_by_identifier(session, AssetType.YOUTUBE, asset_identifier)
     if not asset:
@@ -91,7 +118,7 @@ def get_cached_result(session: Session, asset_identifier: str) -> Optional[dict]
     if not track:
         return None
 
-    return track.content
+    return (track.content, asset.id)
 
 
 # ==================== Admin CRUD ====================
@@ -169,10 +196,11 @@ def delete_user(session: Session, user_id: uuid.UUID) -> bool:
     # Delete storage files
     for storage_path in storage_paths:
         try:
-            if os.path.exists(storage_path):
-                os.remove(storage_path)
+            full_path = _resolve_storage_path(storage_path)
+            if os.path.exists(full_path):
+                os.remove(full_path)
                 # Also remove directory if empty
-                dir_path = os.path.dirname(storage_path)
+                dir_path = os.path.dirname(full_path)
                 if dir_path and os.path.exists(dir_path) and not os.listdir(dir_path):
                     os.rmdir(dir_path)
         except OSError as e:
@@ -236,13 +264,15 @@ def delete_asset(session: Session, asset_id: uuid.UUID) -> bool:
     session.commit()
 
     # Delete storage file if it exists
-    if storage_path and os.path.exists(storage_path):
+    if storage_path:
         try:
-            os.remove(storage_path)
-            # Also remove directory if empty
-            dir_path = os.path.dirname(storage_path)
-            if dir_path and os.path.exists(dir_path) and not os.listdir(dir_path):
-                os.rmdir(dir_path)
+            full_path = _resolve_storage_path(storage_path)
+            if os.path.exists(full_path):
+                os.remove(full_path)
+                # Also remove directory if empty
+                dir_path = os.path.dirname(full_path)
+                if dir_path and os.path.exists(dir_path) and not os.listdir(dir_path):
+                    os.rmdir(dir_path)
         except OSError as e:
             print(f"Warning: Failed to delete storage file {storage_path}: {e}")
 

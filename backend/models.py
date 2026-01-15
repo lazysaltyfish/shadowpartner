@@ -82,6 +82,7 @@ class Segment(BaseModel):
 
 class VideoResponse(BaseModel):
     video_id: str
+    asset_id: Optional[str] = None  # Asset UUID for play page routing
     title: str
     segments: List[Segment]
     metrics: Optional[ProcessingMetrics] = None

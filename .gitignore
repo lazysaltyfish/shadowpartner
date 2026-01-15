@@ -33,6 +33,7 @@ backend/data/
 # (Nothing specific to ignore for this simple frontend yet, maybe node_modules if we had them)
 node_modules/
 dist/
+frontend/test-results/
 
 # Logs
 *.log

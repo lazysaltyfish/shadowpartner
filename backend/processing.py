@@ -165,10 +165,11 @@ def check_cache(asset_identifier: str) -> Optional[VideoResponse]:
         VideoResponse if cache hit, None otherwise
     """
     with get_session() as db:
-        cached_content = get_cached_result(db, asset_identifier)
-        if not cached_content:
+        cache_result = get_cached_result(db, asset_identifier)
+        if not cache_result:
             return None
 
+        cached_content, asset_id = cache_result
         logger.info(f"Cache hit for asset: {asset_identifier}")
 
         segments_data = cached_content.get("segments", [])
@@ -189,6 +190,7 @@ def check_cache(asset_identifier: str) -> Optional[VideoResponse]:
 
         return VideoResponse(
             video_id=asset_identifier,
+            asset_id=str(asset_id),
             title=cached_content.get("title", ""),
             segments=segments,
             metrics=metrics,
@@ -207,7 +209,7 @@ def save_subtitle_to_db(
     created_by: Optional[uuid.UUID] = None,
     detected_language: Optional[str] = None,
     language_probs: Optional[Dict[str, float]] = None,
-):
+) -> uuid.UUID:
     """Save processed subtitle to database.
 
     Args:
@@ -220,6 +222,9 @@ def save_subtitle_to_db(
         created_by: User ID who created the asset
         detected_language: Detected language code from Whisper
         language_probs: Language detection probabilities from Whisper
+
+    Returns:
+        Asset UUID for play page routing
     """
     with get_session() as db:
         if asset_type is None:
@@ -290,9 +295,10 @@ def save_subtitle_to_db(
         )
         db.add(track)
         db.commit()
-        db.refresh(track)
+        db.refresh(asset)
 
         logger.info(f"Saved subtitle track to DB for asset_id: {asset.id}")
+        return asset.id
 
 
 async def process_audio_task(
@@ -601,7 +607,7 @@ async def process_audio_task(
         language_probs = gen_result.get("language_probs", None)
 
         try:
-            save_subtitle_to_db(
+            asset_id = save_subtitle_to_db(
                 video_id,
                 final_response,
                 source,
@@ -612,6 +618,7 @@ async def process_audio_task(
                 detected_language=detected_language,
                 language_probs=language_probs,
             )
+            final_response.asset_id = str(asset_id)
         except Exception:
             if storage_path and storage is not None:
                 try:

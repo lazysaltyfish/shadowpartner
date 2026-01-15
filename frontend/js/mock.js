@@ -1,3 +1,7 @@
+/**
+ * Mock processing response payload for UI development.
+ * @type {object}
+ */
 window.MOCK_DATA = {
     "task_id": "36f267a1-42db-45a1-8a0b-a7f852231bdc",
     "status": "completed",

@@ -1,0 +1,118 @@
+/**
+ * Simple Hash Router for ShadowPartner
+ * Supports routes: / (home/upload) and /play/{asset_id}
+ */
+
+const Router = {
+    routes: {},
+    currentRoute: null,
+    currentParams: {},
+    /**
+     * Optional hook invoked after each route change.
+     * @type {(route: string, params: object) => void | null}
+     */
+    onRouteChange: null,
+
+    /**
+     * Register a route handler
+     * @param {string} name - Route name
+     * @param {Function} handler - Handler function(params)
+     */
+    register(name, handler) {
+        this.routes[name] = handler;
+    },
+
+    /**
+     * Parse current hash and return route info
+     * @returns {{ route: string, params: object }}
+     */
+    parseHash() {
+        const hash = window.location.hash.slice(1) || '/';
+
+        // Match /play/{asset_id} (UUID format)
+        const playMatch = hash.match(/^\/play\/([a-f0-9-]{36})$/i);
+        if (playMatch) {
+            return { route: 'play', params: { assetId: playMatch[1] } };
+        }
+
+        // Default route (home/upload page)
+        return { route: 'home', params: {} };
+    },
+
+    /**
+     * Navigate to a path
+     * @param {string} path - Path to navigate to (e.g., '/play/uuid')
+     */
+    navigate(path) {
+        window.location.hash = path;
+    },
+
+    /**
+     * Go back to home
+     */
+    goHome() {
+        this.navigate('/');
+    },
+
+    /**
+     * Go to play page
+     * @param {string} assetId - Asset UUID
+     */
+    goToPlay(assetId) {
+        this.navigate(`/play/${assetId}`);
+    },
+
+    /**
+     * Handle route change
+     */
+    handleRoute() {
+        const { route, params } = this.parseHash();
+        this.currentRoute = route;
+        this.currentParams = params;
+
+        console.log('[Router] Route changed:', route, params);
+
+        if (this.routes[route]) {
+            this.routes[route](params);
+        }
+
+        if (this.onRouteChange) {
+            this.onRouteChange(route, params);
+        }
+    },
+
+    /**
+     * Initialize router and start listening for hash changes
+     */
+    init() {
+        window.addEventListener('hashchange', () => this.handleRoute());
+        this.handleRoute(); // Handle initial route
+    },
+
+    /**
+     * Check if current route is play page
+     * @returns {boolean}
+     */
+    isPlayPage() {
+        return this.currentRoute === 'play';
+    },
+
+    /**
+     * Check if current route is home page
+     * @returns {boolean}
+     */
+    isHomePage() {
+        return this.currentRoute === 'home';
+    },
+
+    /**
+     * Get current asset ID (only valid on play page)
+     * @returns {string|null}
+     */
+    getAssetId() {
+        return this.currentParams.assetId || null;
+    }
+};
+
+// Export for use in other modules
+window.Router = Router;

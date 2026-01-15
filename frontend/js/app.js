@@ -28,6 +28,12 @@ createApp({
         const SESSION_STORAGE_KEY = 'shadowpartner_session_id';
         const SESSION_HEADER_NAME = 'X-Session-Id';
 
+        // Router state
+        const currentRoute = ref('home'); // 'home' | 'play'
+        const playPageData = ref(null); // Asset data for play page
+        const playPageLoading = ref(false);
+        const playPageError = ref(null);
+
         const dictation = reactive({
             active: false,
             segmentIndex: 0,
@@ -50,17 +56,27 @@ createApp({
         let pollTimeoutId = null;
         let healthCheckIntervalId = null;
 
+        /**
+         * Persist and apply a manually entered backend base URL.
+         */
         const manualUpdateBaseUrl = () => {
-             console.log('Manually updating API Base URL to:', apiBaseUrl.value);
-             // Remove trailing slash if present
-             if (apiBaseUrl.value.endsWith('/')) {
-                 apiBaseUrl.value = apiBaseUrl.value.slice(0, -1);
-             }
-             localStorage.setItem('shadowpartner_api_url', apiBaseUrl.value);
-             checkBackendHealth();
+            console.log('Manually updating API Base URL to:', apiBaseUrl.value);
+            // Remove trailing slash if present
+            if (apiBaseUrl.value.endsWith('/')) {
+                apiBaseUrl.value = apiBaseUrl.value.slice(0, -1);
+            }
+            localStorage.setItem('shadowpartner_api_url', apiBaseUrl.value);
+            if (window.API) {
+                API.setBaseUrl(apiBaseUrl.value);
+            }
+            checkBackendHealth();
         };
 
         // Backend Health Check
+        /**
+         * Resolve the backend base URL and update health status.
+         * @returns {Promise<void>}
+         */
         const checkBackendHealth = async () => {
             try {
                 // If user has manually set a URL, prioritize it
@@ -102,6 +118,9 @@ createApp({
                     apiBaseUrl.value = baseUrl;
                 }
 
+                if (window.API) {
+                    API.setBaseUrl(apiBaseUrl.value);
+                }
                 console.log('Checking backend health at:', apiBaseUrl.value);
                 const response = await fetch(`${apiBaseUrl.value}/health`, {
                     credentials: 'include'
@@ -187,6 +206,9 @@ createApp({
         };
 
         // Cleanup function
+        /**
+         * Cleanup timers and abort in-flight requests.
+         */
         const cleanup = () => {
             abortController.abort();
             if (healthCheckIntervalId) clearInterval(healthCheckIntervalId);
@@ -194,13 +216,108 @@ createApp({
             if (window._pollInterval) clearInterval(window._pollInterval);
         };
 
+        // Route handlers
+        /**
+         * Load asset data for the play page and initialize the player.
+         * @param {string} assetId
+         * @returns {Promise<void>}
+         */
+        const loadPlayPage = async (assetId) => {
+            console.log('[Router] Loading play page for asset:', assetId);
+            playPageLoading.value = true;
+            playPageError.value = null;
+            playPageData.value = null;
+
+            // Reset dictation and playback state when loading new asset
+            dictation.segmentIndex = 0;
+            dictation.mode = 'listen';
+            dictation.userInput = '';
+            dictation.isPlaying = false;
+            currentTime.value = 0;
+            currentSegmentIndex.value = -1;
+
+            try {
+                const data = await API.getAsset(assetId);
+                console.log('[loadPlayPage] Asset data loaded:', data);
+                playPageData.value = data;
+                playPageLoading.value = false; // Set before nextTick so DOM renders
+
+                // Initialize player after DOM update
+                nextTick(() => {
+                    console.log('[loadPlayPage] nextTick callback executing');
+                    const container = document.getElementById('youtube-player');
+                    console.log('[loadPlayPage] Container element:', container);
+                    if (!container) {
+                        console.error('[loadPlayPage] Container not found!');
+                        return;
+                    }
+
+                    const onTimeUpdate = (time) => {
+                        currentTime.value = time;
+                        updateActiveWords();
+
+                        // Handle dictation loop
+                        if (dictation.active && dictation.isPlaying) {
+                            const segment = playPageData.value?.segments?.[dictation.segmentIndex];
+                            if (segment && time >= segment.end) {
+                                PlayerManager.seekTo(Math.max(0, segment.start - 0.3));
+                                PlayerManager.play();
+                            }
+                        }
+                    };
+
+                    if (data.type === 'youtube') {
+                        PlayerManager.initYouTube(data.identifier, container, {
+                            onTimeUpdate: onTimeUpdate
+                        });
+                    } else {
+                        const streamUrl = API.getStreamUrl(assetId);
+                        console.log('[loadPlayPage] Asset type:', data.type);
+                        console.log('[loadPlayPage] Stream URL:', streamUrl);
+                        console.log('[loadPlayPage] Container:', container);
+                        PlayerManager.initArtPlayer(streamUrl, container, {
+                            onTimeUpdate: onTimeUpdate
+                        });
+                    }
+                });
+            } catch (e) {
+                console.error('[Router] Failed to load asset:', e);
+                playPageError.value = e.message;
+                playPageLoading.value = false;
+            }
+        };
+
+        const handleRouteChange = (route, params) => {
+            currentRoute.value = route;
+
+            // Cleanup previous state
+            PlayerManager.destroy();
+
+            if (route === 'play' && params.assetId) {
+                loadPlayPage(params.assetId);
+            } else {
+                // Reset play page state when going home
+                playPageData.value = null;
+                playPageError.value = null;
+            }
+        };
+
         // Start checking on mount
-        onMounted(() => {
-            checkBackendHealth();
+        onMounted(async () => {
+            // Wait for health check to complete (sets apiBaseUrl)
+            await checkBackendHealth();
             // Poll every 30 seconds
             healthCheckIntervalId = setInterval(checkBackendHealth, 30000);
             // Cleanup on page refresh/close
             window.addEventListener('beforeunload', cleanup);
+
+            // Initialize API module with base URL (after health check sets it)
+            API.setBaseUrl(apiBaseUrl.value);
+            console.log('[App] API base URL set to:', apiBaseUrl.value);
+
+            // Initialize router
+            Router.onRouteChange = handleRouteChange;
+            Router.init();
         });
 
         // Cleanup on unmount
@@ -393,22 +510,27 @@ createApp({
             // Can handle play/pause states here
         };
 
+        /**
+         * Update active subtitle segment based on current playback time.
+         */
         const updateActiveWords = () => {
-            if (!videoData.value) return;
+            // Use playPageData on play page, videoData on home page
+            const data = currentRoute.value === 'play' ? playPageData.value : videoData.value;
+            if (!data) return;
 
-            const segments = videoData.value.segments;
+            const segments = data.segments;
             let foundSegment = -1;
 
             // Search backwards to find the last matching segment, which is usually the correct one
             for (let i = segments.length - 1; i >= 0; i--) {
                 const seg = segments[i];
-                
+
                 const start = seg.start;
                 const end = seg.end;
-                
+
                 if (currentTime.value >= start) {
                     foundSegment = i;
-                    break; 
+                    break;
                 }
             }
 
@@ -426,17 +548,32 @@ createApp({
             return videoData.value?.has_word_timestamps !== false;
         });
 
+        const currentHasWordTimestamps = computed(() => {
+            if (currentRoute.value === 'play') {
+                return playPageData.value?.has_word_timestamps !== false;
+            }
+            return videoData.value?.has_word_timestamps !== false;
+        });
+
         const isWordActive = (word, segment) => {
             // If we don't have word-level timestamps, highlight all words in the current segment
-            if (!hasWordTimestamps.value && segment) {
+            if (!currentHasWordTimestamps.value && segment) {
                 return currentTime.value >= segment.start && currentTime.value < segment.end;
             }
             // Otherwise, use precise word-level timing
             return currentTime.value >= word.start && currentTime.value < word.end;
         };
 
+        /**
+         * Seek playback to a specific time and start playback.
+         * @param {number} time
+         */
         const seekTo = (time) => {
-            if (player.value) {
+            // Use PlayerManager on play page, player.value on home page
+            if (currentRoute.value === 'play') {
+                PlayerManager.seekTo(time);
+                PlayerManager.play();
+            } else if (player.value) {
                 player.value.seekTo(time, true);
                 if (player.value.playVideo) player.value.playVideo();
             }
@@ -454,8 +591,10 @@ createApp({
         });
 
         const getCurrentSegment = () => {
-            if (!videoData.value?.segments) return null;
-            return videoData.value.segments[dictation.segmentIndex];
+            // Use playPageData on play page, videoData on home page
+            const data = currentRoute.value === 'play' ? playPageData.value : videoData.value;
+            if (!data?.segments) return null;
+            return data.segments[dictation.segmentIndex];
         };
 
         const getSegmentText = (segment) => {
@@ -463,22 +602,42 @@ createApp({
             return segment.words.map(w => w.text).join('');
         };
 
+        /**
+         * Play the current dictation segment from a slight pre-roll.
+         */
         const playCurrentSegment = () => {
             const segment = getCurrentSegment();
-            if (!segment || !player.value) return;
-            
-            player.value.seekTo(Math.max(0, segment.start - 0.3), true);
-            player.value.playVideo();
+            if (!segment) return;
+
+            const startTime = Math.max(0, segment.start - 0.3);
+
+            // Use PlayerManager on play page, player.value on home page
+            if (currentRoute.value === 'play') {
+                PlayerManager.seekTo(startTime);
+                PlayerManager.play();
+            } else if (player.value) {
+                player.value.seekTo(startTime, true);
+                player.value.playVideo();
+            }
             dictation.isPlaying = true;
         };
 
+        /**
+         * Pause playback and stop dictation looping.
+         */
         const stopDictationPlayback = () => {
-            if (player.value) {
+            // Use PlayerManager on play page, player.value on home page
+            if (currentRoute.value === 'play') {
+                PlayerManager.pause();
+            } else if (player.value) {
                 player.value.pauseVideo();
             }
             dictation.isPlaying = false;
         };
 
+        /**
+         * Toggle dictation playback state.
+         */
         const toggleDictationPlayback = () => {
             if (dictation.isPlaying) {
                 stopDictationPlayback();
@@ -495,8 +654,10 @@ createApp({
         };
 
         const gotoNextSegment = () => {
-            if (!videoData.value?.segments) return;
-            if (dictation.segmentIndex < videoData.value.segments.length - 1) {
+            // Use playPageData on play page, videoData on home page
+            const data = currentRoute.value === 'play' ? playPageData.value : videoData.value;
+            if (!data?.segments) return;
+            if (dictation.segmentIndex < data.segments.length - 1) {
                 dictation.segmentIndex++;
                 resetDictationInput();
             }
@@ -625,6 +786,12 @@ createApp({
             if (subtitleInput.value) subtitleInput.value.value = '';
         };
 
+        /**
+         * Upload a large file in chunks with optional subtitle upload.
+         * @param {File} file
+         * @param {File|null} subtitleFile
+         * @returns {Promise<string>}
+         */
         const uploadChunks = async (file, subtitleFile) => {
             try {
                 const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB chunks to be safe
@@ -720,6 +887,10 @@ createApp({
         }
         };
 
+        /**
+         * Start processing for a YouTube URL or uploaded file.
+         * @returns {Promise<void>}
+         */
         const processVideo = async () => {
             if (!videoUrl.value && !selectedFile.value) return;
             
@@ -830,6 +1001,11 @@ createApp({
             }
         };
 
+        /**
+         * Poll backend task status until completion or failure.
+         * @param {string} taskId
+         * @returns {Promise<void>}
+         */
         const pollStatus = async (taskId) => {
             const pollInterval = 5000; // 5 seconds
 
@@ -860,6 +1036,18 @@ createApp({
                             console.table(statusData.result.metrics);
                         }
 
+                        loading.value = false;
+
+                        // Auto-redirect to play page if asset_id is available
+                        if (statusData.result.asset_id) {
+                            console.log('[Debug] Redirecting to play page:', statusData.result.asset_id);
+                            Router.goToPlay(statusData.result.asset_id);
+                            return;
+                        }
+
+                        // Fallback: show in current page (for backward compatibility)
+                        console.log('[Debug] No asset_id, showing in current page');
+
                         // Set warnings BEFORE videoData to ensure modal shows correctly
                         console.log('[Debug] Processing warnings:', statusData.result.warnings);
                         if (statusData.result.warnings && Array.isArray(statusData.result.warnings) && statusData.result.warnings.length > 0) {
@@ -871,8 +1059,6 @@ createApp({
 
                         videoData.value = statusData.result;
 
-                        loading.value = false; // Turn off loading BEFORE initPlayer
-                        
                         // Check if segments exist
                         if (statusData.result.segments && statusData.result.segments.length > 0) {
                             console.log(`[Debug] Loaded ${statusData.result.segments.length} segments`);
@@ -912,24 +1098,47 @@ createApp({
 
         const visibleSegments = computed(() => {
             if (!videoData.value || !videoData.value.segments) return [];
-            
+
             const segments = videoData.value.segments;
             const current = currentSegmentIndex.value;
             const range = contextRange.value;
-            
+
             // Determine the window of segments to show
             // If current is -1 (not started), show the beginning
             const centerIndex = current === -1 ? 0 : current;
-            
+
             const start = Math.max(0, centerIndex - range);
             const end = Math.min(segments.length, centerIndex + range + 1);
-            
+
             // console.log('[Debug] Computing visibleSegments', { centerIndex, start, end });
 
             return segments.slice(start, end).map((seg, index) => ({
                 ...seg,
                 originalIndex: start + index
             }));
+        });
+
+        // Visible segments for play page
+        const playPageVisibleSegments = computed(() => {
+            if (!playPageData.value || !playPageData.value.segments) return [];
+
+            const segments = playPageData.value.segments;
+            const current = currentSegmentIndex.value;
+            const range = contextRange.value;
+
+            const centerIndex = current === -1 ? 0 : current;
+            const start = Math.max(0, centerIndex - range);
+            const end = Math.min(segments.length, centerIndex + range + 1);
+
+            return segments.slice(start, end).map((seg, index) => ({
+                ...seg,
+                originalIndex: start + index
+            }));
+        });
+
+        // Check if play page has word timestamps
+        const playPageHasWordTimestamps = computed(() => {
+            return playPageData.value?.has_word_timestamps !== false;
         });
 
         return {
@@ -972,7 +1181,15 @@ createApp({
             gotoNextSegment,
             skipCurrentSegment,
             handleDictationMainAction,
-            handleDictationEnter
+            handleDictationEnter,
+            // Router state
+            currentRoute,
+            playPageData,
+            playPageLoading,
+            playPageError,
+            playPageVisibleSegments,
+            playPageHasWordTimestamps,
+            goHome: () => Router.goHome()
         };
     }
 }).mount('#app');

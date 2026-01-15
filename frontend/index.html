@@ -39,8 +39,8 @@
             </div>
         </header>
 
-        <!-- Input Area -->
-        <div v-if="!videoData" class="bg-white p-6 rounded-lg shadow-md mb-6">
+        <!-- Home Page: Input Area -->
+        <div v-if="currentRoute === 'home' && !videoData" class="bg-white p-6 rounded-lg shadow-md mb-6">
             <div class="flex flex-col gap-4">
                 <!-- YouTube URL Input -->
                 <div class="flex gap-4">
@@ -134,8 +134,177 @@
             </div>
         </div>
 
-        <!-- Main Content (Player & Subtitles) -->
-        <div v-if="videoData" class="flex-1 flex flex-col overflow-hidden gap-4">
+        <!-- Play Page -->
+        <div v-if="currentRoute === 'play'" class="flex-1 flex flex-col overflow-hidden">
+            <!-- Loading State -->
+            <div v-if="playPageLoading" class="flex-1 flex items-center justify-center">
+                <div class="text-center">
+                    <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                    <p class="text-gray-600">加载中...</p>
+                </div>
+            </div>
+
+            <!-- Error State -->
+            <div v-else-if="playPageError" class="flex-1 flex items-center justify-center">
+                <div class="text-center">
+                    <p class="text-red-600 mb-4">{{ playPageError }}</p>
+                    <button @click="goHome" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                        返回首页
+                    </button>
+                </div>
+            </div>
+
+            <!-- Play Page Content -->
+            <div v-else-if="playPageData" class="flex-1 flex flex-col overflow-hidden gap-4">
+                <!-- Header with back button -->
+                <div class="flex items-center gap-4 mb-2">
+                    <button @click="goHome" class="text-gray-600 hover:text-gray-800">
+                        ← 返回
+                    </button>
+                    <h2 class="text-xl font-semibold text-gray-800 truncate">{{ playPageData.title }}</h2>
+                </div>
+
+                <!-- Video Player Area -->
+                <div class="shrink-0 bg-black rounded-lg overflow-hidden shadow-lg">
+                    <div id="youtube-player" class="w-full"></div>
+                </div>
+
+                <!-- Mode Toggle -->
+                <div class="flex justify-center">
+                    <div class="flex bg-gray-800 rounded-lg p-1">
+                        <button
+                            @click="dictation.active = false"
+                            :class="!dictation.active ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'"
+                            class="px-4 py-1.5 rounded-md text-sm font-medium transition-all"
+                        >
+                            Shadowing
+                        </button>
+                        <button
+                            @click="dictation.active = true"
+                            :class="dictation.active ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'"
+                            class="px-4 py-1.5 rounded-md text-sm font-medium transition-all"
+                        >
+                            Dictation
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Subtitles Area - Shadowing Mode -->
+                <div v-if="!dictation.active" class="flex-1 bg-gray-900 rounded-lg shadow-md p-6 overflow-y-auto relative scroll-smooth border border-gray-800">
+                    <div class="max-w-3xl mx-auto flex flex-col justify-center min-h-full transition-all duration-500">
+                        <div
+                            v-for="(segment, index) in playPageVisibleSegments"
+                            :key="segment.originalIndex"
+                            class="mb-6 p-4 rounded-xl transition-all duration-500 transform"
+                            :class="currentSegmentIndex === segment.originalIndex ? 'bg-gray-800 ring-2 ring-blue-500/50 shadow-lg scale-100 opacity-100' : 'bg-transparent opacity-40 scale-95'"
+                        >
+                            <!-- Japanese Line -->
+                            <div class="text-xl mb-2 leading-loose font-medium" :class="currentSegmentIndex === segment.originalIndex ? 'text-white' : 'text-gray-400'">
+                                <span
+                                    v-for="(word, wIndex) in segment.words"
+                                    :key="wIndex"
+                                    class="group inline-block px-1 rounded transition-all duration-150 cursor-pointer select-none"
+                                    :class="{
+                                        'bg-blue-600 text-white shadow-sm font-bold': isWordActive(word, segment),
+                                        'hover:bg-gray-700': !isWordActive(word, segment)
+                                    }"
+                                    @click="seekTo(playPageHasWordTimestamps ? word.start : segment.start)"
+                                >
+                                    <ruby>
+                                        {{ word.text }}
+                                        <rt class="text-xs font-normal select-none transition-opacity" :class="isWordActive(word, segment) ? 'text-blue-200' : 'text-gray-500'">{{ word.reading }}</rt>
+                                    </ruby>
+                                </span>
+                            </div>
+                            <!-- Translation Line -->
+                            <div class="text-base border-t border-gray-700 pt-2 mt-1 font-light" :class="currentSegmentIndex === segment.originalIndex ? 'text-gray-300' : 'text-gray-500'">
+                                {{ segment.translation }}
+                            </div>
+                        </div>
+                        <div v-if="playPageVisibleSegments.length === 0" class="text-center text-gray-500 py-10">
+                            等待播放...
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dictation Mode for Play Page -->
+                <div v-if="dictation.active" class="flex-1 flex flex-col bg-gray-900 rounded-lg shadow-inner border border-gray-800 overflow-hidden">
+                    <div class="h-1 w-full bg-gray-800">
+                        <div class="h-full bg-blue-500 transition-all duration-300" :style="{ width: (dictation.segmentIndex / (playPageData?.segments?.length || 1) * 100) + '%' }"></div>
+                    </div>
+
+                    <div class="flex-1 flex flex-col items-center justify-center p-6 space-y-4">
+                        <div class="text-gray-500 text-sm">
+                            Sentence {{ dictation.segmentIndex + 1 }} / {{ playPageData?.segments?.length || 0 }}
+                        </div>
+
+                        <button
+                            @click="toggleDictationPlayback"
+                            class="w-16 h-16 rounded-full text-white flex items-center justify-center shadow-lg transform transition-all active:scale-95 hover:scale-105"
+                            :class="dictation.isPlaying ? 'bg-red-500 hover:bg-red-400' : 'bg-blue-600 hover:bg-blue-500'"
+                            :title="dictation.isPlaying ? 'Stop' : 'Play'">
+                            <svg v-if="!dictation.isPlaying" class="w-8 h-8 ml-1" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z"/>
+                            </svg>
+                            <svg v-else class="w-7 h-7" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M6 6h12v12H6z"/>
+                            </svg>
+                        </button>
+                        <div class="text-gray-400 text-xs">{{ dictation.isPlaying ? 'Looping...' : 'Click to listen' }}</div>
+
+                        <textarea
+                            v-if="dictation.mode !== 'review'"
+                            v-model="dictation.userInput"
+                            @compositionstart="dictation.isComposing = true"
+                            @compositionend="dictation.isComposing = false"
+                            @keydown.enter.prevent="handleDictationEnter"
+                            class="w-full max-w-2xl bg-gray-800 border-2 border-gray-700 focus:border-blue-500 rounded-xl p-4 text-xl text-white placeholder-gray-600 focus:outline-none focus:ring-4 focus:ring-blue-500/20 transition-all resize-none text-center leading-relaxed"
+                            rows="3"
+                            placeholder="Type what you hear..."
+                            inputmode="text"
+                        ></textarea>
+
+                        <div v-if="dictation.mode === 'review'" class="w-full max-w-2xl text-center text-xl leading-relaxed font-medium bg-gray-800/50 p-6 rounded-xl border border-gray-700">
+                            <span v-for="(char, idx) in dictation.diffResult" :key="idx"
+                                :class="{
+                                    'text-green-400': char.status === 'correct',
+                                    'text-red-400': char.status === 'wrong',
+                                    'text-yellow-400 opacity-60': char.status === 'missing'
+                                }">{{ char.text }}</span>
+                            <div v-if="dictation.currentScore !== null" class="mt-4 text-sm text-gray-400">
+                                Accuracy: <span :class="dictation.currentScore >= 80 ? 'text-green-400' : 'text-yellow-400'">{{ dictation.currentScore }}%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="p-4 bg-gray-800 border-t border-gray-700 flex items-center justify-center gap-4">
+                        <button @click="gotoPrevSegment" class="p-3 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition-colors" title="Previous">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                        </button>
+                        <button @click="playCurrentSegment" class="p-3 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition-colors" title="Replay">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                        </button>
+                        <button
+                            @click="handleDictationMainAction"
+                            class="px-6 py-2.5 rounded-full font-bold text-base shadow-lg transform transition-all active:scale-95 flex items-center gap-2"
+                            :class="dictation.mode === 'review' ? 'bg-green-600 hover:bg-green-500 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'">
+                            <span v-if="dictation.mode !== 'review'">Check</span>
+                            <span v-else>Next</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path></svg>
+                        </button>
+                        <button v-if="dictation.mode !== 'review'" @click="skipCurrentSegment" class="p-3 text-gray-400 hover:text-yellow-400 hover:bg-gray-700 rounded-full transition-colors" title="Skip">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg>
+                        </button>
+                        <button @click="gotoNextSegment" class="p-3 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition-colors" title="Next">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Home Page: Main Content (Player & Subtitles) -->
+        <div v-if="currentRoute === 'home' && videoData" class="flex-1 flex flex-col overflow-hidden gap-4">
 
             <!-- Video Player Area -->
             <div class="shrink-0 bg-black rounded-lg overflow-hidden shadow-lg">
@@ -316,6 +485,11 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <!-- Mock Data -->
     <script src="js/mock.js"></script>
+    <!-- Modules -->
+    <script src="js/router.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/player.js"></script>
+    <script src="js/subtitles.js"></script>
     <!-- App Logic -->
     <script src="js/app.js"></script>
     <!-- PWA Service Worker Registration -->

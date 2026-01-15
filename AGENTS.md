@@ -38,10 +38,29 @@
 - **Testing**: When modifying player code, you MUST test with both a YouTube video AND a local uploaded file to ensure consistent behavior.
 
 ### Testing Requirements
+
+#### Backend Tests
 - **Pre-commit Requirement**: All tests MUST pass before committing code changes.
 - **Test Command**: Run `cd backend && uv run pytest tests/` to execute all tests.
 - **Strict Requirement**: AI assistants MUST run tests and ensure they all pass before proposing any commit.
 - **Warning Policy**: Warnings from project source code (non-test files) are NOT allowed and must be fixed. Warnings from test files (`tests/`) are acceptable and can be ignored.
+
+#### Frontend Tests (E2E with Playwright)
+- **Pre-commit Requirement**: All frontend tests MUST pass before committing frontend code changes.
+- **Test Command**: Run `cd frontend && npm test` to execute all Playwright tests.
+- **Test Coverage**: Tests cover home page, play page, router, player initialization, and error handling.
+- **Test Files**:
+  - `frontend/tests/home.spec.js` - Home page and router tests
+  - `frontend/tests/playpage.spec.js` - Play page, player, and subtitle tests
+- **Running Options**:
+  ```bash
+  cd frontend
+  npm test              # Run all tests (headless)
+  npm run test:headed   # Run with browser visible
+  npm run test:ui       # Run with Playwright UI
+  ```
+- **Requirements**: Tests require both frontend (port 3000) and backend (port 8000) servers running. Playwright config auto-starts them if not running.
+- **Strict Requirement**: AI assistants MUST run frontend tests after modifying any frontend files (js/, index.html, css/).
 
 ### Git & Commit Standards
 - **Atomic Commits**: Each commit should focus on a single logical change or feature.
@@ -126,8 +145,15 @@ data/                           # [NEW] Persistent data (git ignored)
 
 ### Frontend Structure (`/frontend`)
 ```
-index.html                    # Main HTML
-js/app.js (670 lines)         # Vue 3 application
+index.html                    # Main HTML with routing support
+js/
+  ├── app.js                  # Vue 3 application (main entry)
+  ├── router.js               # Hash router (#/play/{asset_id})
+  ├── api.js                  # API client module
+  ├── player.js               # Unified player (YouTube + ArtPlayer)
+  ├── subtitles.js            # Subtitle rendering module
+  └── mock.js                 # Mock data for development
+css/style.css                 # Custom styles
 service-worker.js             # PWA offline support
 manifest.json                 # PWA config
 ```
@@ -228,6 +254,18 @@ Input (File + User SRT Subtitle)
 - `GET /api/status/{task_id}` - Get task status and progress
   - Returns: `TaskInfo` with status, progress, message, result/error
   - **Rate Limit**: 120 requests per minute (frequent polling)
+
+### Public Asset Access
+- `GET /api/assets/{asset_id}` - Get asset details for play page
+  - Returns: `{ id, type, identifier, title, segments, has_word_timestamps, created_at }`
+  - Public endpoint, no authentication required
+  - Used by frontend play page (`#/play/{asset_id}`)
+  - **Rate Limit**: 60 requests per minute
+- `GET /api/assets/{asset_id}/stream` - Stream media file
+  - Only available for `upload` type assets
+  - Supports HTTP Range requests for video seeking
+  - Returns appropriate MIME type based on file extension
+  - **Rate Limit**: 30 requests per minute
 
 ### Health Check
 - `GET /` - API heartbeat
@@ -359,6 +397,7 @@ Input (File + User SRT Subtitle)
 ```python
 {
   video_id: str,
+  asset_id: Optional[str],  # Asset UUID for play page routing
   title: str,
   segments: List[Segment],
   metrics: Optional[ProcessingMetrics],  # None if processing failed
@@ -436,6 +475,7 @@ Input (File + User SRT Subtitle)
 6. **Interactive Playback**: Word-level highlighting, click-to-seek functionality
 7. **PWA**: Offline support via Service Worker, installable app
 8. **Admin Panel**: Admin interface for managing users, assets, and subtitle tracks (requires ADMIN_USERNAME/PASSWORD)
+9. **Play Page Routing**: Dedicated play page via hash routing (`#/play/{asset_id}`), auto-redirect after processing
 
 ## Important Implementation Details
 - **Persistent Architecture**: Database-based storage with SQLite (easily upgradable to PostgreSQL via DATABASE_URL env var)
@@ -461,6 +501,8 @@ Input (File + User SRT Subtitle)
 - **Similarity Checking**: Validates user-provided subtitles against generated ones
 - **Video ID Hashing**: Uploaded files get hashed video IDs for uniqueness
 - **YouTube Player Sizing**: Frontend CSS enforces a 16:9 aspect ratio and iframe fill for `#youtube-player` to avoid collapsed embed height.
+- **Play Page State**: Play-page loads reset playback/segment state; word highlighting respects per-asset `has_word_timestamps`; API base URL updates are propagated to the shared API client.
+- **Frontend Docs**: Key frontend workflow functions and modules include JSDoc for easier navigation and maintenance.
 - **Rate Limiting**: Implemented using slowapi (0.1.9) library with in-memory storage; different endpoints have different limits:
   - `/api/process`: 5/minute (expensive operation)
   - `/api/upload*`: 5/minute for upload/complete, 10/minute for subtitle, 300/minute for chunk
@@ -482,7 +524,14 @@ Input (File + User SRT Subtitle)
   - Admin session stored in `X-Admin-Session-Id` header for all admin requests
   - Admin sessions have 24-hour TTL and are cleaned every 5 minutes
   - Admin can view and delete any user-uploaded content (users, assets, subtitle tracks)
+  - Storage file deletions resolve relative storage paths via the storage provider (or local hashed path fallback)
   - Frontend admin panel at `frontend/admin.html` provides tabbed interface for management
+- **Frontend Routing**: Hash-based SPA routing for play page navigation
+  - Routes: `/` (home/upload), `/play/{asset_id}` (dedicated play page)
+  - Auto-redirect to play page after processing completes (when `asset_id` is available)
+  - Modular architecture: `router.js`, `api.js`, `player.js`, `subtitles.js`
+  - Unified player interface supports both YouTube IFrame API and ArtPlayer
+  - Direct URL access to play page via `#/play/{asset_id}` supported
 
 ## Running the Application
 
