@@ -58,12 +58,20 @@
                     <h1 class="text-3xl font-bold text-gray-800">Admin Panel</h1>
                     <p class="text-gray-600">Manage users, assets, and subtitle tracks</p>
                 </div>
-                <button
-                    @click="handleLogout"
-                    class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors"
-                >
-                    Logout
-                </button>
+                <div class="flex gap-2">
+                    <button
+                        @click="goToUpload"
+                        class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                        前往上传
+                    </button>
+                    <button
+                        @click="handleLogout"
+                        class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors"
+                    >
+                        Logout
+                    </button>
+                </div>
             </header>
 
             <!-- Tabs -->
@@ -179,7 +187,9 @@
                             <tr>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Identifier</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Admin</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created By</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Subtitle Tracks</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created At</th>
@@ -188,7 +198,7 @@
                         </thead>
                         <tbody class="bg-white divide-y divide-gray-200">
                             <tr v-if="assets.length === 0">
-                                <td colspan="7" class="px-6 py-4 text-center text-gray-500">No assets found</td>
+                                <td colspan="9" class="px-6 py-4 text-center text-gray-500">No assets found</td>
                             </tr>
                             <tr v-for="asset in assets" :key="asset.id" class="hover:bg-gray-50">
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" :title="asset.id">
@@ -204,8 +214,20 @@
                                         {{ asset.type === 'youtube' ? 'YouTube' : 'Upload' }}
                                     </span>
                                 </td>
+                                <td class="px-6 py-4 text-sm text-gray-900 max-w-xs truncate" :title="asset.title || '-'">
+                                    {{ asset.title || '-' }}
+                                </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 cursor-pointer hover:text-blue-600 hover:underline" :title="asset.identifier" @click="openPlayPage(asset)">
                                     {{ asset.identifier.substring(0, 20) }}{{ asset.identifier.length > 20 ? '...' : '' }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                    <span
+                                        v-if="asset.is_admin_upload"
+                                        class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800"
+                                    >
+                                        Admin
+                                    </span>
+                                    <span v-else class="text-gray-400">-</span>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" :title="asset.created_by">
                                     {{ asset.created_by ? asset.created_by.substring(0, 8) + '...' : 'N/A' }}
@@ -217,6 +239,12 @@
                                     {{ formatDate(asset.created_at) }}
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    <button
+                                        @click="openEditModal(asset)"
+                                        class="text-blue-600 hover:text-blue-900 mr-3"
+                                    >
+                                        Edit
+                                    </button>
                                     <button
                                         @click="confirmDelete('asset', asset.id, asset.identifier)"
                                         class="text-red-600 hover:text-red-900"
@@ -358,6 +386,60 @@
                 </div>
             </div>
         </div>
+
+        <!-- Edit Asset Modal -->
+        <div v-if="showEditModal" class="fixed inset-0 z-[9999] flex items-center justify-center" style="background-color: rgba(0,0,0,0.75);">
+            <div class="bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6 mx-4">
+                <div class="sm:flex sm:items-start">
+                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 sm:mx-0 sm:h-10 sm:w-10">
+                        <svg class="h-6 w-6 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                    </div>
+                    <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">
+                            Edit Asset Metadata
+                        </h3>
+                        <div class="mt-4 space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                                <input
+                                    v-model="editForm.title"
+                                    type="text"
+                                    placeholder="Enter title"
+                                    class="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                                <textarea
+                                    v-model="editForm.description"
+                                    placeholder="Enter description"
+                                    rows="3"
+                                    class="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                ></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse gap-2">
+                    <button
+                        @click="saveAssetMeta"
+                        :disabled="saving"
+                        class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:w-auto sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {{ saving ? 'Saving...' : 'Save' }}
+                    </button>
+                    <button
+                        @click="showEditModal = false"
+                        :disabled="saving"
+                        class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Vue 3 -->
@@ -383,6 +465,9 @@
                 const deleting = ref(false);
                 const loginForm = ref({ username: '', password: '' });
                 const apiBaseUrl = ref('http://localhost:8000');
+                const showEditModal = ref(false);
+                const editForm = ref({ assetId: '', title: '', description: '' });
+                const saving = ref(false);
 
                 const buildAdminHeaders = () => ({
                     [ADMIN_SESSION_HEADER_NAME]: adminSession.value
@@ -544,6 +629,70 @@
                     window.open(`index.html#/play/${asset.id}`, '_blank');
                 };
 
+                const goToUpload = () => {
+                    window.location.href = 'index.html#/upload';
+                };
+
+                const openEditModal = async (asset) => {
+                    editForm.value = {
+                        assetId: asset.id,
+                        title: '',
+                        description: ''
+                    };
+                    showEditModal.value = true;
+
+                    // Fetch current metadata
+                    try {
+                        const response = await fetch(
+                            `${apiBaseUrl.value}/api/admin/assets/${asset.id}/meta`,
+                            { headers: buildAdminHeaders() }
+                        );
+                        if (response.ok) {
+                            const data = await response.json();
+                            editForm.value.title = data.title || '';
+                            editForm.value.description = data.description || '';
+                        }
+                    } catch (e) {
+                        console.error('Failed to fetch asset meta:', e);
+                    }
+                };
+
+                const saveAssetMeta = async () => {
+                    saving.value = true;
+                    try {
+                        const response = await fetch(
+                            `${apiBaseUrl.value}/api/admin/assets/${editForm.value.assetId}/meta`,
+                            {
+                                method: 'PATCH',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    ...buildAdminHeaders()
+                                },
+                                body: JSON.stringify({
+                                    title: editForm.value.title,
+                                    description: editForm.value.description
+                                })
+                            }
+                        );
+
+                        if (response.ok) {
+                            showEditModal.value = false;
+                            // Reload assets to reflect changes
+                            await loadData();
+                        } else if (response.status === 401) {
+                            handleLogout();
+                        } else {
+                            const errorData = await response.json();
+                            alert(errorData.detail || 'Failed to save');
+                        }
+                    } catch (e) {
+                        console.error('Save error:', e);
+                        alert(e.message || 'Failed to save');
+                    } finally {
+                        saving.value = false;
+                    }
+                };
+
                 // Watch for tab changes and reload data
                 watch(activeTab, () => {
                     if (adminSession.value) {
@@ -570,13 +719,19 @@
                     deleting,
                     loginForm,
                     apiBaseUrl,
+                    showEditModal,
+                    editForm,
+                    saving,
                     handleLogin,
                     handleLogout,
                     loadData,
                     confirmDelete,
                     executeDelete,
                     formatDate,
-                    openPlayPage
+                    openPlayPage,
+                    goToUpload,
+                    openEditModal,
+                    saveAssetMeta
                 };
             }
         }).mount('#app');

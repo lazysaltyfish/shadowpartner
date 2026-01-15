@@ -328,3 +328,29 @@ def delete_subtitle_track(session: Session, track_id: uuid.UUID) -> bool:
     session.delete(track)
     session.commit()
     return True
+
+
+def update_asset_meta(session: Session, asset_id: uuid.UUID, meta_updates: dict) -> Optional[Asset]:
+    """Update asset metadata fields.
+
+    Args:
+        session: Database session
+        asset_id: Asset UUID
+        meta_updates: Dictionary of metadata fields to update (title, description, etc.)
+
+    Returns:
+        Updated Asset if found, None otherwise
+    """
+    asset = session.get(Asset, asset_id)
+    if not asset:
+        return None
+
+    # Merge new meta with existing meta
+    current_meta = asset.meta or {}
+    updated_meta = {**current_meta, **meta_updates}
+    asset.meta = updated_meta
+
+    session.add(asset)
+    session.commit()
+    session.refresh(asset)
+    return asset

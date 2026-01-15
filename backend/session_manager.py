@@ -65,29 +65,36 @@ def invalidate_session(session_id: str) -> bool:
 async def update_session_upload(
     session: AuthSession, file_size: int, task_increment: bool = False
 ) -> bool:
-    """Update session upload statistics. Returns False if limits exceeded."""
+    """Update session upload statistics. Returns False if limits exceeded.
+
+    Checks limits BEFORE incrementing to ensure accurate enforcement.
+    """
     async with session.lock:
         if time.time() > session.expires_at:
             return False
 
-        session.total_size += file_size
+        # Check limits BEFORE incrementing
+        new_upload_count = session.upload_count + (1 if task_increment else 0)
+        new_total_size = session.total_size + file_size
 
-        if task_increment:
-            session.upload_count += 1
-
-        if session.upload_count > settings.auth_session_max_uploads:
+        if new_upload_count > settings.auth_session_max_uploads:
             logger.warning(
                 f"Session {session.session_id} exceeded upload count limit: "
-                f"{session.upload_count}/{settings.auth_session_max_uploads}"
+                f"{new_upload_count}/{settings.auth_session_max_uploads}"
             )
             return False
 
-        if session.total_size > settings.auth_session_max_total_size:
+        if new_total_size > settings.auth_session_max_total_size:
             logger.warning(
                 f"Session {session.session_id} exceeded total size limit: "
-                f"{session.total_size}/{settings.auth_session_max_total_size}"
+                f"{new_total_size}/{settings.auth_session_max_total_size}"
             )
             return False
+
+        # Only increment after passing checks
+        session.total_size = new_total_size
+        if task_increment:
+            session.upload_count = new_upload_count
 
     return True
 
@@ -267,6 +274,24 @@ async def get_current_admin_session(
         raise HTTPException(status_code=401, detail="Invalid or expired admin session")
 
     return session
+
+
+async def get_current_admin_session_optional(
+    request: Request, session_id: Optional[str] = Header(None, alias="X-Admin-Session-Id")
+) -> Optional[AdminSession]:
+    """FastAPI dependency to optionally validate admin session from header.
+
+    Args:
+        request: FastAPI request object
+        session_id: Admin session ID from X-Admin-Session-Id header
+
+    Returns:
+        AdminSession if valid, None if missing or invalid (no exception raised)
+    """
+    if not session_id:
+        return None
+
+    return validate_admin_session(session_id)
 
 
 async def sweep_admin_sessions():

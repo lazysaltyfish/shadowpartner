@@ -57,6 +57,12 @@ createApp({
         });
         const targetPauseTime = ref(null);
 
+        // Admin mode state
+        const isAdminMode = computed(() => API.hasAdminSession());
+        const showEditModal = ref(false);
+        const editForm = ref({ assetId: '', title: '', description: '' });
+        const editSaving = ref(false);
+
         // AbortController for canceling requests on page unload
         let abortController = new AbortController();
         let pollTimeoutId = null;
@@ -193,9 +199,17 @@ createApp({
             // Don't reload page - let the caller handle retry
         };
 
-        const buildSessionHeaders = (sid) => ({
-            [SESSION_HEADER_NAME]: sid
-        });
+        const buildSessionHeaders = (sid) => {
+            const headers = {
+                [SESSION_HEADER_NAME]: sid
+            };
+            // Add admin session header if available
+            const adminSid = API.getAdminSessionId();
+            if (adminSid) {
+                headers[API.ADMIN_SESSION_HEADER_NAME] = adminSid;
+            }
+            return headers;
+        };
 
         // Fetch with automatic session refresh on 401
         const fetchWithAuth = async (url, options = {}, retryOnAuth = true) => {
@@ -1074,6 +1088,17 @@ createApp({
 
                         // Auto-redirect to play page if asset_id is available
                         if (statusData.result.asset_id) {
+                            // For admin uploads, show edit modal first
+                            if (isAdminMode.value) {
+                                console.log('[Debug] Admin mode: showing edit modal for asset:', statusData.result.asset_id);
+                                editForm.value = {
+                                    assetId: statusData.result.asset_id,
+                                    title: statusData.result.title || '',
+                                    description: ''
+                                };
+                                showEditModal.value = true;
+                                return;
+                            }
                             console.log('[Debug] Redirecting to play page:', statusData.result.asset_id);
                             Router.goToPlay(statusData.result.asset_id);
                             return;
@@ -1175,6 +1200,29 @@ createApp({
             return playPageData.value?.has_word_timestamps !== false;
         });
 
+        // Admin edit modal methods
+        const saveEditAndNavigate = async () => {
+            editSaving.value = true;
+            try {
+                await API.updateAssetMeta(editForm.value.assetId, {
+                    title: editForm.value.title,
+                    description: editForm.value.description
+                });
+                showEditModal.value = false;
+                Router.goToPlay(editForm.value.assetId);
+            } catch (e) {
+                console.error('Failed to save asset meta:', e);
+                alert('保存失败: ' + e.message);
+            } finally {
+                editSaving.value = false;
+            }
+        };
+
+        const skipEditAndNavigate = () => {
+            showEditModal.value = false;
+            Router.goToPlay(editForm.value.assetId);
+        };
+
         return {
             videoUrl,
             loading,
@@ -1230,7 +1278,14 @@ createApp({
             homeAssets,
             homeLoading,
             homeHasMore,
-            loadMoreAssets: () => loadHomeAssets(true)
+            loadMoreAssets: () => loadHomeAssets(true),
+            // Admin mode state
+            isAdminMode,
+            showEditModal,
+            editForm,
+            editSaving,
+            saveEditAndNavigate,
+            skipEditAndNavigate
         };
     }
 }).mount('#app');

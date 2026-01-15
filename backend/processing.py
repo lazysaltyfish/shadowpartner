@@ -209,6 +209,7 @@ def save_subtitle_to_db(
     created_by: Optional[uuid.UUID] = None,
     detected_language: Optional[str] = None,
     language_probs: Optional[Dict[str, float]] = None,
+    is_admin_upload: bool = False,
 ) -> uuid.UUID:
     """Save processed subtitle to database.
 
@@ -243,6 +244,7 @@ def save_subtitle_to_db(
                 storage_path=storage_path,
                 meta=meta,
                 created_by=created_by,
+                is_admin_upload=is_admin_upload,
             )
             db.add(asset)
         else:
@@ -310,6 +312,7 @@ async def process_audio_task(
     subtitle_path: Optional[str] = None,
     created_by: Optional[uuid.UUID] = None,
     asset_meta: Optional[dict] = None,
+    is_admin_upload: bool = False,
 ):
     """
     Process audio/video file and generate learning segments.
@@ -617,6 +620,7 @@ async def process_audio_task(
                 created_by=created_by,
                 detected_language=detected_language,
                 language_probs=language_probs,
+                is_admin_upload=is_admin_upload,
             )
             final_response.asset_id = str(asset_id)
         except Exception:
@@ -665,7 +669,7 @@ async def process_audio_task(
         release_upload_session(task_id)
 
 
-async def download_and_process(task_id: str, url: str):
+async def download_and_process(task_id: str, url: str, is_admin_upload: bool = False):
     temp_file = None
     try:
         _ensure_services_initialized()
@@ -691,6 +695,7 @@ async def download_and_process(task_id: str, url: str):
             video_id,
             video_title,
             download_time=download_time,
+            is_admin_upload=is_admin_upload,
         )
     except asyncio.CancelledError:
         logger.warning(f"Task {task_id}: Download cancelled")

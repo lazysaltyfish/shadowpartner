@@ -8,6 +8,8 @@ const API = {
     sessionId: null,
     SESSION_STORAGE_KEY: 'shadowpartner_session_id',
     SESSION_HEADER_NAME: 'X-Session-Id',
+    ADMIN_SESSION_STORAGE_KEY: 'shadowpartner_admin_session_id',
+    ADMIN_SESSION_HEADER_NAME: 'X-Admin-Session-Id',
 
     /**
      * Set API base URL
@@ -84,6 +86,11 @@ const API = {
             ...(options.headers || {}),
             [this.SESSION_HEADER_NAME]: sid
         };
+        // Add admin session header if available
+        const adminSid = this.getAdminSessionId();
+        if (adminSid) {
+            headers[this.ADMIN_SESSION_HEADER_NAME] = adminSid;
+        }
         const response = await fetch(url, { ...options, headers, credentials: 'include' });
 
         if (response.status === 401 && retryOnAuth) {
@@ -167,12 +174,18 @@ const API = {
      */
     async processVideo(url) {
         const sid = await this.ensureSession();
+        const headers = {
+            'Content-Type': 'application/json',
+            [this.SESSION_HEADER_NAME]: sid
+        };
+        // Add admin session header if available
+        const adminSid = this.getAdminSessionId();
+        if (adminSid) {
+            headers[this.ADMIN_SESSION_HEADER_NAME] = adminSid;
+        }
         const response = await fetch(`${this.baseUrl}/api/process`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                [this.SESSION_HEADER_NAME]: sid
-            },
+            headers,
             body: JSON.stringify({ url }),
             credentials: 'include'
         });
@@ -180,6 +193,74 @@ const API = {
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.detail || 'Failed to process video');
+        }
+        return await response.json();
+    },
+
+    // ==================== Admin Session Methods ====================
+
+    /**
+     * Get stored admin session ID
+     * @returns {string|null}
+     */
+    getAdminSessionId() {
+        return localStorage.getItem(this.ADMIN_SESSION_STORAGE_KEY);
+    },
+
+    /**
+     * Check if admin session exists
+     * @returns {boolean}
+     */
+    hasAdminSession() {
+        return !!this.getAdminSessionId();
+    },
+
+    /**
+     * Get asset metadata (admin only)
+     * @param {string} assetId - Asset UUID
+     * @returns {Promise<object>}
+     */
+    async getAssetMeta(assetId) {
+        const adminSid = this.getAdminSessionId();
+        if (!adminSid) {
+            throw new Error('Admin session required');
+        }
+        const response = await fetch(`${this.baseUrl}/api/admin/assets/${assetId}/meta`, {
+            headers: {
+                [this.ADMIN_SESSION_HEADER_NAME]: adminSid
+            },
+            credentials: 'include'
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to get asset metadata');
+        }
+        return await response.json();
+    },
+
+    /**
+     * Update asset metadata (admin only)
+     * @param {string} assetId - Asset UUID
+     * @param {object} meta - Metadata to update (title, description)
+     * @returns {Promise<object>}
+     */
+    async updateAssetMeta(assetId, meta) {
+        const adminSid = this.getAdminSessionId();
+        if (!adminSid) {
+            throw new Error('Admin session required');
+        }
+        const response = await fetch(`${this.baseUrl}/api/admin/assets/${assetId}/meta`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                [this.ADMIN_SESSION_HEADER_NAME]: adminSid
+            },
+            body: JSON.stringify(meta),
+            credentials: 'include'
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to update asset metadata');
         }
         return await response.json();
     }

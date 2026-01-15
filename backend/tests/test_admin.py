@@ -396,3 +396,280 @@ def test_missing_admin_session_header(client):
 
     assert response.status_code == 401
     assert "Admin session required" in response.json()["detail"]
+
+
+# ==================== Asset Metadata Tests ====================
+
+
+def test_get_asset_meta_success(admin_client, test_user):
+    """Test getting asset metadata as admin."""
+    with get_session() as db:
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset.meta = {"title": "Test Title", "description": "Test Description"}
+        db.commit()
+        asset_id = asset.id
+
+    response = admin_client.get(f"/api/admin/assets/{asset_id}/meta")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == str(asset_id)
+    assert data["title"] == "Test Title"
+    assert data["description"] == "Test Description"
+    assert "type" in data
+    assert "identifier" in data
+    assert "is_admin_upload" in data
+
+
+def test_get_asset_meta_not_found(admin_client):
+    """Test getting metadata for non-existent asset."""
+    fake_id = uuid.uuid4()
+    response = admin_client.get(f"/api/admin/assets/{fake_id}/meta")
+
+    assert response.status_code == 404
+    assert "Asset not found" in response.json()["detail"]
+
+
+def test_get_asset_meta_invalid_id(admin_client):
+    """Test getting metadata with invalid ID format."""
+    response = admin_client.get("/api/admin/assets/invalid-uuid/meta")
+
+    assert response.status_code == 400
+    assert "Invalid asset ID format" in response.json()["detail"]
+
+
+def test_get_asset_meta_unauthorized(client, test_user):
+    """Test getting metadata without admin session."""
+    with get_session() as db:
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset_id = asset.id
+
+    response = client.get(f"/api/admin/assets/{asset_id}/meta")
+
+    assert response.status_code == 401
+
+
+def test_update_asset_meta_success(admin_client, test_user):
+    """Test updating asset metadata as admin."""
+    with get_session() as db:
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset_id = asset.id
+
+    response = admin_client.patch(
+        f"/api/admin/assets/{asset_id}/meta",
+        json={"title": "New Title", "description": "New Description"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "New Title"
+    assert data["description"] == "New Description"
+
+    # Verify in database
+    with get_session() as db:
+        asset = db.query(Asset).filter(Asset.id == asset_id).first()
+        assert asset.meta["title"] == "New Title"
+        assert asset.meta["description"] == "New Description"
+
+
+def test_update_asset_meta_partial(admin_client, test_user):
+    """Test partial update of asset metadata."""
+    with get_session() as db:
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset.meta = {"title": "Original Title", "description": "Original Description"}
+        db.commit()
+        asset_id = asset.id
+
+    # Update only title
+    response = admin_client.patch(
+        f"/api/admin/assets/{asset_id}/meta",
+        json={"title": "Updated Title"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "Updated Title"
+    # Description should be preserved
+    assert data["description"] == "Original Description"
+
+
+def test_update_asset_meta_not_found(admin_client):
+    """Test updating metadata for non-existent asset."""
+    fake_id = uuid.uuid4()
+    response = admin_client.patch(
+        f"/api/admin/assets/{fake_id}/meta",
+        json={"title": "New Title"},
+    )
+
+    assert response.status_code == 404
+    assert "Asset not found" in response.json()["detail"]
+
+
+def test_update_asset_meta_invalid_id(admin_client):
+    """Test updating metadata with invalid ID format."""
+    response = admin_client.patch(
+        "/api/admin/assets/invalid-uuid/meta",
+        json={"title": "New Title"},
+    )
+
+    assert response.status_code == 400
+    assert "Invalid asset ID format" in response.json()["detail"]
+
+
+def test_update_asset_meta_no_fields(admin_client, test_user):
+    """Test updating metadata with no fields."""
+    with get_session() as db:
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset_id = asset.id
+
+    response = admin_client.patch(
+        f"/api/admin/assets/{asset_id}/meta",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "No fields to update" in response.json()["detail"]
+
+
+def test_update_asset_meta_unauthorized(client, test_user):
+    """Test updating metadata without admin session."""
+    with get_session() as db:
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset_id = asset.id
+
+    response = client.patch(
+        f"/api/admin/assets/{asset_id}/meta",
+        json={"title": "New Title"},
+    )
+
+    assert response.status_code == 401
+
+
+# ==================== Admin Upload Flag Tests ====================
+
+
+def test_is_admin_upload_flag_default(admin_client, test_user):
+    """Test that is_admin_upload defaults to False."""
+    with get_session() as db:
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset_id = asset.id
+
+    response = admin_client.get(f"/api/admin/assets/{asset_id}/meta")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["is_admin_upload"] is False
+
+
+def test_is_admin_upload_flag_set(admin_client, test_user):
+    """Test that is_admin_upload can be set to True."""
+    with get_session() as db:
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset.is_admin_upload = True
+        db.commit()
+        asset_id = asset.id
+
+    response = admin_client.get(f"/api/admin/assets/{asset_id}/meta")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["is_admin_upload"] is True
+
+
+def test_list_assets_includes_is_admin_upload(admin_client, test_user):
+    """Test that asset list includes is_admin_upload field."""
+    response = admin_client.get("/api/admin/assets")
+
+    assert response.status_code == 200
+    assets = response.json()
+    assert len(assets) > 0
+    # Check that is_admin_upload is in the response
+    asset = assets[0]
+    assert "is_admin_upload" in asset
+
+
+def test_list_assets_includes_title(admin_client, test_user):
+    """Test that admin asset list includes title field with correct priority."""
+    meta_title = "Admin Meta Title"
+
+    with get_session() as db:
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset.meta = {"title": meta_title}
+        db.commit()
+        asset_id = asset.id
+
+    response = admin_client.get("/api/admin/assets")
+
+    assert response.status_code == 200
+    assets = response.json()
+    assert len(assets) > 0
+    # Find the asset we modified
+    asset_item = next((a for a in assets if a["id"] == str(asset_id)), None)
+    assert asset_item is not None
+    assert "title" in asset_item
+    assert asset_item["title"] == meta_title
+
+
+# ==================== Title Priority Tests ====================
+
+
+def test_asset_meta_title_takes_priority_over_track_content(client, test_user):
+    """Test that asset.meta title takes priority over track.content title."""
+    original_title = "Original Track Title"
+    meta_title = "Updated Meta Title"
+
+    with get_session() as db:
+        # Create asset with meta title
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset.meta = {"title": meta_title}
+        db.commit()
+        asset_id = asset.id
+
+        # Update the track content to have a different title
+        track = db.query(SubtitleTrack).filter(SubtitleTrack.asset_id == asset_id).first()
+        if track:
+            content = track.content or {}
+            content["title"] = original_title
+            track.content = content
+            db.commit()
+
+    # Test single asset endpoint - should return meta title
+    response = client.get(f"/api/assets/{asset_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == meta_title
+
+    # Test list endpoint - should also return meta title
+    response = client.get("/api/assets/list")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    asset_item = next((item for item in items if item["id"] == str(asset_id)), None)
+    if asset_item:
+        assert asset_item["title"] == meta_title
+
+
+def test_asset_falls_back_to_track_content_title(client, test_user):
+    """Test that asset falls back to track.content title when meta title is empty."""
+    track_title = "Track Content Title"
+
+    with get_session() as db:
+        # Create asset without meta title
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset.meta = {}  # No title in meta
+        db.commit()
+        asset_id = asset.id
+
+        # Set track content title
+        track = db.query(SubtitleTrack).filter(SubtitleTrack.asset_id == asset_id).first()
+        if track:
+            content = dict(track.content) if track.content else {}
+            content["title"] = track_title
+            track.content = content
+            db.add(track)  # Mark as modified
+            db.commit()
+
+    # Test single asset endpoint - should return track content title
+    response = client.get(f"/api/assets/{asset_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == track_title

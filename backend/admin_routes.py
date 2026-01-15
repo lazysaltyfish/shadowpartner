@@ -14,7 +14,11 @@ from db.crud import (
     get_all_assets,
     get_all_subtitle_tracks,
     get_all_users,
+    get_asset_by_id,
+    get_subtitle_track_by_asset,
+    update_asset_meta,
 )
+from db.models import SubtitleTrackType
 from models import AdminLoginRequest
 from session_manager import (
     AdminSession,
@@ -55,6 +59,8 @@ class AssetResponse(BaseModel):
     created_by: Optional[str]
     created_at: str
     subtitle_tracks_count: int
+    is_admin_upload: bool
+    title: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -71,6 +77,22 @@ class SubtitleTrackResponse(BaseModel):
     created_at: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AssetMetaResponse(BaseModel):
+    id: str
+    type: str
+    identifier: str
+    title: Optional[str]
+    description: Optional[str]
+    is_admin_upload: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AssetMetaUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
 
 
 # ==================== Admin Authentication ====================
@@ -202,6 +224,17 @@ async def list_assets(
         assets, _total = get_all_assets(db, limit=limit, offset=offset)
         result = []
         for asset in assets:
+            # Compute title: prioritize asset.meta title over track.content title
+            meta_title = (asset.meta or {}).get("title")
+            track_title = None
+            if not meta_title:
+                track = get_subtitle_track_by_asset(
+                    db, asset.id, SubtitleTrackType.PROCESSED, is_default=True
+                )
+                if track and track.content:
+                    track_title = track.content.get("title")
+            title = meta_title if meta_title else track_title
+
             asset_response = AssetResponse(
                 id=str(asset.id),
                 type=asset.type.value,
@@ -211,6 +244,8 @@ async def list_assets(
                 created_by=str(asset.created_by) if asset.created_by else None,
                 created_at=asset.created_at.isoformat(),
                 subtitle_tracks_count=len(asset.subtitle_tracks),
+                is_admin_upload=asset.is_admin_upload,
+                title=title,
             )
             result.append(asset_response)
         return result
@@ -245,6 +280,93 @@ async def delete_asset_endpoint(
             logger.info(f"Admin {admin_session.username} deleted asset {asset_id}")
             return {"message": f"Asset {asset_id} deleted successfully"}
         raise HTTPException(status_code=404, detail="Asset not found")
+
+
+@router.get("/api/admin/assets/{asset_id}/meta", response_model=AssetMetaResponse)
+async def get_asset_meta(
+    asset_id: str,
+    admin_session: AdminSession = Depends(get_current_admin_session),
+):
+    """Get asset metadata.
+
+    Requires admin authentication.
+
+    Args:
+        asset_id: Asset UUID
+        admin_session: Admin session from dependency
+
+    Returns:
+        AssetMetaResponse with asset metadata
+    """
+    try:
+        asset_uuid = uuid.UUID(asset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+
+    with get_session() as db:
+        asset = get_asset_by_id(db, asset_uuid)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        meta = asset.meta or {}
+        return AssetMetaResponse(
+            id=str(asset.id),
+            type=asset.type.value,
+            identifier=asset.identifier,
+            title=meta.get("title"),
+            description=meta.get("description"),
+            is_admin_upload=asset.is_admin_upload,
+        )
+
+
+@router.patch("/api/admin/assets/{asset_id}/meta", response_model=AssetMetaResponse)
+async def update_asset_meta_endpoint(
+    asset_id: str,
+    request: AssetMetaUpdateRequest,
+    admin_session: AdminSession = Depends(get_current_admin_session),
+):
+    """Update asset metadata.
+
+    Requires admin authentication.
+
+    Args:
+        asset_id: Asset UUID
+        request: AssetMetaUpdateRequest with title and/or description
+        admin_session: Admin session from dependency
+
+    Returns:
+        Updated AssetMetaResponse
+    """
+    try:
+        asset_uuid = uuid.UUID(asset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+
+    # Build meta updates from request
+    meta_updates = {}
+    if request.title is not None:
+        meta_updates["title"] = request.title
+    if request.description is not None:
+        meta_updates["description"] = request.description
+
+    if not meta_updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    with get_session() as db:
+        asset = update_asset_meta(db, asset_uuid, meta_updates)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        logger.info(f"Admin {admin_session.username} updated asset {asset_id} meta")
+        meta = asset.meta or {}
+        return AssetMetaResponse(
+            id=str(asset.id),
+            type=asset.type.value,
+            identifier=asset.identifier,
+            title=meta.get("title"),
+            description=meta.get("description"),
+            is_admin_upload=asset.is_admin_upload,
+        )
 
 
 # ==================== Subtitle Track Management ====================

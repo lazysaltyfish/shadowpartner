@@ -44,6 +44,7 @@ from models import (
 from processing import check_cache, download_and_process, process_audio_task
 from rate_limiter import get_limiter
 from services.video_utils import generate_video_id_from_file
+from session_manager import AdminSession
 from uploads import (
     UPLOAD_DIR,
     _ensure_dir,
@@ -191,8 +192,19 @@ async def process_video(
     video_request: VideoRequest,
     background_tasks: BackgroundTasks,
     auth_session: Optional[AuthSession] = Depends(session_manager.get_current_session_optional),
+    admin_session: Optional[AdminSession] = Depends(
+        session_manager.get_current_admin_session_optional
+    ),
 ):
     try:
+        # Check session limits BEFORE creating any task entries
+        if auth_session:
+            limit_ok = await session_manager.update_session_upload(
+                auth_session, 0, task_increment=True
+            )
+            if not limit_ok:
+                raise HTTPException(status_code=429, detail="Session upload limit exceeded")
+
         # Check for cached result
         youtube_id = video_request.url.split("v=")[-1].split("&")[0].split("/watch?v=")[-1][:11]
         cached_result = check_cache(youtube_id)
@@ -206,8 +218,6 @@ async def process_video(
                 message="Using cached processing result",
                 result=cached_result,
             )
-            if auth_session:
-                await session_manager.update_session_upload(auth_session, 0, task_increment=True)
             return AsyncProcessResponse(task_id=task_id, message="Using cached result")
 
         task_id = str(uuid.uuid4())
@@ -218,18 +228,20 @@ async def process_video(
         )
         logger.info(f"Starting video processing task {task_id} for URL: {video_request.url}")
 
-        if auth_session:
-            await session_manager.update_session_upload(auth_session, 0, task_increment=True)
-
         if state.task_manager is None:
             raise RuntimeError("Task manager not initialized")
+
+        is_admin_upload = admin_session is not None
         state.task_manager.create_task(
-            download_and_process(task_id, video_request.url),
+            download_and_process(task_id, video_request.url, is_admin_upload=is_admin_upload),
             name=f"download_and_process:{task_id}",
         )
 
         return AsyncProcessResponse(task_id=task_id, message="Video processing started")
 
+    except HTTPException:
+        # Re-raise HTTPException as-is (don't wrap in 500)
+        raise
     except Exception as e:
         logger.error(f"Error starting video processing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -371,6 +383,9 @@ async def upload_subtitle(
 async def complete_upload(
     request: Request,
     auth_session: AuthSession = Depends(session_manager.get_current_session),
+    admin_session: Optional[AdminSession] = Depends(
+        session_manager.get_current_admin_session_optional
+    ),
     task_id: str = Form(...),
     filename: str = Form(...),
     subtitle_filename: Optional[str] = Form(None),
@@ -429,9 +444,10 @@ async def complete_upload(
             )
             session.completed = True
             session.processing_started = True
-            await session_manager.update_session_upload(
+            if not await session_manager.update_session_upload(
                 auth_session, total_size, task_increment=True
-            )
+            ):
+                raise HTTPException(status_code=429, detail="Session upload limit exceeded")
             if session.temp_file and os.path.exists(session.temp_file):
                 try:
                     os.remove(session.temp_file)
@@ -452,12 +468,17 @@ async def complete_upload(
         session.completed = True
         session.processing_started = True
 
-        await session_manager.update_session_upload(auth_session, total_size, task_increment=True)
+        limit_ok = await session_manager.update_session_upload(
+            auth_session, total_size, task_increment=True
+        )
+        if not limit_ok:
+            raise HTTPException(status_code=429, detail="Session upload limit exceeded")
 
         if state.task_manager is None:
             raise RuntimeError("Task manager not initialized")
 
         # Use the original temp file for processing (session.temp_file contains the uploaded data)
+        is_admin_upload = admin_session is not None
         state.task_manager.create_task(
             process_audio_task(
                 task_id,
@@ -471,6 +492,7 @@ async def complete_upload(
                     "filename": filename,
                     "original_ext": os.path.splitext(filename)[1] or ".mp3",
                 },
+                is_admin_upload=is_admin_upload,
             ),
             name=f"process_audio_task:{task_id}",
         )
@@ -484,6 +506,9 @@ async def upload_video(
     request: Request,
     background_tasks: BackgroundTasks,
     auth_session: AuthSession = Depends(session_manager.get_current_session),
+    admin_session: Optional[AdminSession] = Depends(
+        session_manager.get_current_admin_session_optional
+    ),
     file: UploadFile = File(...),
     subtitle: Optional[UploadFile] = File(None),
 ):
@@ -509,7 +534,11 @@ async def upload_video(
     )
 
     file_size = file.size if file.size is not None else 0
-    await session_manager.update_session_upload(auth_session, file_size, task_increment=True)
+    limit_ok = await session_manager.update_session_upload(
+        auth_session, file_size, task_increment=True
+    )
+    if not limit_ok:
+        raise HTTPException(status_code=429, detail="Session upload limit exceeded")
 
     if cached_result:
         task_id = str(uuid.uuid4())
@@ -537,6 +566,7 @@ async def upload_video(
     if temp_file is None:
         raise HTTPException(status_code=500, detail="Temporary upload file missing")
 
+    is_admin_upload = admin_session is not None
     state.task_manager.create_task(
         process_audio_task(
             task_id,
@@ -550,6 +580,7 @@ async def upload_video(
                 "filename": file.filename,
                 "original_ext": os.path.splitext(file.filename)[1] or ".mp3",
             },
+            is_admin_upload=is_admin_upload,
         ),
         name=f"process_audio_task:{task_id}",
     )
@@ -582,7 +613,10 @@ async def get_asset(request: Request, asset_id: str, limit: int = 20, offset: in
                 track = get_subtitle_track_by_asset(
                     db, asset.id, SubtitleTrackType.PROCESSED, is_default=True
                 )
-                title = track.content.get("title", "") if track else ""
+                # Prioritize asset.meta title over track.content title
+                meta_title = (asset.meta or {}).get("title")
+                track_title = track.content.get("title", "") if track else ""
+                title = meta_title if meta_title else track_title
                 thumbnail = None
                 if asset.type == AssetType.YOUTUBE:
                     thumbnail = f"https://img.youtube.com/vi/{asset.identifier}/mqdefault.jpg"
@@ -627,11 +661,16 @@ async def get_asset(request: Request, asset_id: str, limit: int = 20, offset: in
             for seg in segments_data
         ]
 
+        # Prioritize asset.meta title over track.content title
+        meta_title = (asset.meta or {}).get("title")
+        track_title = content.get("title", "")
+        title = meta_title if meta_title else track_title
+
         return {
             "id": str(asset.id),
             "type": asset.type.value,
             "identifier": asset.identifier,
-            "title": content.get("title", ""),
+            "title": title,
             "segments": [seg.model_dump() for seg in segments],
             "has_word_timestamps": content.get("has_word_timestamps", True),
             "created_at": asset.created_at.isoformat(),

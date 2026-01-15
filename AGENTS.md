@@ -32,6 +32,26 @@
   cd backend && uv run pyright
   ```
 
+### Backend Exception Handling
+- **HTTPException Preservation**: When catching exceptions in FastAPI endpoints, you MUST ensure `HTTPException` is re-raised properly so the correct HTTP status code is returned to the client.
+- **Pattern**: Always separate `HTTPException` from generic exceptions:
+  ```python
+  async def some_endpoint(...):
+      try:
+          # Business logic that may raise HTTPException (e.g., 429, 404, 400)
+          if some_limit_exceeded:
+              raise HTTPException(status_code=429, detail="Limit exceeded")
+          # ... other logic
+      except HTTPException:
+          # Re-raise HTTPException as-is (don't wrap in 500)
+          raise
+      except Exception as e:
+          logger.error(f"Error: {e}", exc_info=True)
+          raise HTTPException(status_code=500, detail=str(e))
+  ```
+- **Why**: Without the `except HTTPException: raise` clause, all exceptions (including intentional 4xx errors) get caught by `except Exception` and returned as 500 Internal Server Error.
+- **Strict Requirement**: AI assistants MUST use this pattern when adding try/except blocks to FastAPI endpoints.
+
 ### Frontend Player Requirements
 - **Dual Player Support**: The frontend supports two video players: **YouTube IFrame API** (for YouTube URLs) and **ArtPlayer** (for uploaded local files).
 - **Strict Requirement**: Any changes to player-related functionality (playback controls, seeking, looping, time tracking, etc.) MUST work identically on BOTH players.
@@ -302,12 +322,19 @@ Input (File + User SRT Subtitle)
 ### Admin Asset Management (NEW)
 - `GET /api/admin/assets` - List all assets
   - Requires: `X-Admin-Session-Id` header
-  - Returns: `[{ id, type, identifier, storage_path, meta, created_by, created_at, subtitle_tracks_count }, ...]`
+  - Returns: `[{ id, type, identifier, storage_path, meta, created_by, created_at, subtitle_tracks_count, is_admin_upload }, ...]`
   - Supports pagination via `limit` and `offset` query params
 - `DELETE /api/admin/assets/{asset_id}` - Delete asset and all subtitle tracks
   - Requires: `X-Admin-Session-Id` header
   - Cascades delete to all asset's subtitle tracks
   - Deletes storage file if it exists
+- `GET /api/admin/assets/{asset_id}/meta` - Get asset metadata
+  - Requires: `X-Admin-Session-Id` header
+  - Returns: `{ id, type, identifier, title, description, is_admin_upload }`
+- `PATCH /api/admin/assets/{asset_id}/meta` - Update asset metadata
+  - Requires: `X-Admin-Session-Id` header
+  - Input: `{ "title": "...", "description": "..." }` (both optional)
+  - Returns: Updated metadata object
 
 ### Admin Subtitle Track Management (NEW)
 - `GET /api/admin/subtitle-tracks` - List all subtitle tracks
@@ -338,8 +365,9 @@ Input (File + User SRT Subtitle)
   type: Enum,  # "youtube" or "upload"
   identifier: str,  # YouTube ID or file SHA256 (unique index)
   storage_path: Optional[str],  # Only for UPLOAD type
-  meta: Optional[dict],  # Title, duration, thumbnail URL
+  meta: Optional[dict],  # Title, description, duration, thumbnail URL
   created_by: UUID,  # FK -> User.id
+  is_admin_upload: bool,  # True if uploaded by admin (default: False)
   created_at: DateTime,
 }
 ```
@@ -535,6 +563,9 @@ Input (File + User SRT Subtitle)
   - Storage file deletions resolve relative storage paths via the storage provider (or local hashed path fallback)
   - Frontend admin panel at `frontend/admin.html` provides tabbed interface for management
   - Asset identifiers in the admin assets table open the play page in a new tab
+  - Admin uploads: When admin session is active, uploads are marked with `is_admin_upload=true`
+  - Admin upload flow: After upload completes, edit modal appears for title/description before navigating to play page
+  - Upload page shows "管理员模式" badge when admin session is detected
 - **Frontend Routing**: Hash-based SPA routing for page navigation
   - Routes: `/` (home video grid), `/upload` (upload page), `/play/{asset_id}` (dedicated play page)
   - Home page displays responsive video grid with infinite scroll

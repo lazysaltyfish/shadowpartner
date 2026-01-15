@@ -51,6 +51,7 @@ class Asset(SQLModel, table=True):
     meta: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     created_by: Optional[uuid.UUID] = Field(default=None, foreign_key="user.id")
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    is_admin_upload: bool = Field(default=False)
 
     # Unique constraint on type + identifier for deduplication
     __table_args__ = (UniqueConstraint("type", "identifier", name="uq_asset_type_identifier"),)
