@@ -1,105 +1,349 @@
 # ShadowPartner (影子跟读)
 
 ## 项目简介
-这是一个支持 PWA 的视频影子跟读应用。它能自动为 YouTube 视频生成日语字幕（带假名注音和词级别高亮）以及中文翻译，帮助你进行跟读练习。
 
-## 开发环境配置 (Development Setup)
+ShadowPartner 是一款面向日语学习者的渐进式 Web 应用（PWA），可处理 YouTube 视频和本地上传文件，生成带词级时间戳、假名注音和中文翻译的交互式字幕。
 
-本项目使用 **Pyright** 进行静态类型检查，并使用 **Ruff** 进行代码格式化。
+### 核心功能
+- **视频处理**：自动下载和处理 YouTube 视频或本地文件
+- **语音识别**：使用 OpenAI Whisper 进行准确的日语转录，带词级时间戳
+- **日语NLP**：使用 MeCab 进行形态学分析，自动生成假名注音
+- **翻译**：通过 Google Gemini API 进行批量翻译
+- **交互式播放**：词级高亮、点击跳转功能
 
-### VS Code 配置
+## 技术栈
 
-1.  **推荐插件**:
-    *   **Pylance**: 微软官方提供的 Python 语言服务器，内置了 Pyright 支持。
-    *   **Ruff**: 用于实时代码格式化检查。
+### 后端
+- **框架**：FastAPI (Python 3.11+) + Uvicorn
+- **数据库**：SQLite + SQLModel（支持轻松迁移到 PostgreSQL）
+- **核心库**：
+  - `openai-whisper`（转录）
+  - `google-genai`（翻译）
+  - `mecab-python3` + `unidic-lite`（日语NLP）
+  - `yt-dlp`（YouTube下载）
+  - `tenacity`（重试/退避）
+  - `slowapi` + `limits`（速率限制）
+  - `sqlmodel` + `sqlalchemy`（数据库ORM）
+  - `python-magic`（文件类型检测）
 
-2.  **配置步骤**:
-    *   项目根目录下已提供 `.vscode/settings.json`。
-    *   打开项目后，按下 `Ctrl + Shift + P`，选择 `Python: Select Interpreter`。
-    *   选择 `backend/.venv/bin/python` 作为解释器。
-    *   如果你发现类型检查未生效，请确保 `Pylance` 已启用。
+### 前端
+- **框架**：Vue 3 + Tailwind CSS（CDN方式）
+- **视频播放器**：ArtPlayer（本地上传）+ YouTube IFrame API
+- **测试**：Playwright（E2E测试）
 
-3.  **命令行验证**:
-    你也可以在命令行手动运行检查：
-    ```bash
-    cd backend
-    uv run pyright  # 类型检查
-    uv run ruff check .  # 代码风格检查
-    ```
+### 开发工具
+- **格式化/检查**：Ruff
+- **类型检查**：Pyright
+- **包管理**：uv
 
-## 环境准备 (Prerequisites)
+## 项目结构
 
-1.  **Python 3.10+**
-2.  **FFmpeg**:
-    *   **Windows**: 请下载 [FFmpeg](https://ffmpeg.org/download.html)，解压，并将 `bin` 目录添加到系统的 PATH 环境变量中。打开 PowerShell 输入 `ffmpeg -version` 确认安装成功。
-    *   **Linux**: 项目包含自动安装脚本 (`backend/setup_ffmpeg.py`)，也可以使用 `sudo apt install ffmpeg`。
-3.  **API Key**: 获取 Google Gemini API Key 用于翻译。
-
-## 安装步骤 (Installation)
-
-1.  **安装后端依赖**:
-    进入 `backend` 目录：
-    ```bash
-    cd backend
-    pip install -r requirements.txt
-    # 或者如果你安装了 uv (推荐):
-    uv sync
-    ```
-
-2.  **安装 FFmpeg (Linux Only)**:
-    如果你的 Linux 系统没有 FFmpeg，运行此脚本自动下载静态构建版：
-    ```bash
-    python setup_ffmpeg.py
-    ```
-
-## 运行 (Running)
-
-你需要打开两个终端窗口，分别启动后端和前端。
-
-### 1. 启动后端 (Backend)
-
-进入 `backend` 目录：
-
-*   **Windows (PowerShell)**:
-    ```powershell
-    $env:GEMINI_API_KEY="你的_GEMINI_API_KEY"
-    uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
-    ```
-    *(如果没有 uv，使用 `python -m uvicorn main:app ...`)*
-
-*   **Linux/Mac**:
-    ```bash
-    export GEMINI_API_KEY="你的_GEMINI_API_KEY"
-    uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
-    ```
-
-后端将在 `http://localhost:8000` 启动。
-
-### 2. 启动前端 (Frontend)
-
-你有两种方式启动前端服务器：
-
-**方法 A: 使用系统 Python (如果已安装)**
-```bash
-cd frontend
-python -m http.server 3000
-# 或者 python3 -m http.server 3000
+```
+shadowpartner/
+├── backend/
+│   ├── main.py                    # FastAPI 应用工厂
+│   ├── lifecycle.py               # 启动/关闭钩子
+│   ├── middleware.py              # 请求日志 + CORS
+│   ├── rate_limiter.py            # 速率限制单例
+│   ├── routes.py                  # API 端点
+│   ├── admin_routes.py            # 管理端点
+│   ├── session_manager.py         # 会话管理
+│   ├── processing.py              # 视频处理流水线
+│   ├── uploads.py                 # 上传处理
+│   ├── models.py                  # Pydantic 模型
+│   ├── state.py                   # 内存状态
+│   ├── settings.py                # 环境配置
+│   ├── validators.py              # 文件验证
+│   ├── services_registry.py       # 服务初始化
+│   ├── db/                        # 数据库模块
+│   │   ├── engine.py              # 数据库引擎
+│   │   ├── models.py              # SQLModel 模型
+│   │   └── crud.py                # CRUD 操作
+│   ├── services/                  # 业务逻辑
+│   │   ├── downloader.py          # YouTube/文件下载
+│   │   ├── transcriber.py         # Whisper 转录
+│   │   ├── analyzer.py            # 日语 NLP
+│   │   ├── aligner.py             # 时间戳对齐
+│   │   ├── translator.py          # Gemini 翻译
+│   │   ├── subtitle_linearizer.py # 字幕去重
+│   │   ├── video_utils.py         # 视频工具
+│   │   └── storage/               # 存储抽象层
+│   │       ├── base.py            # 基础存储类
+│   │       └── local.py           # 本地存储实现
+│   ├── utils/                     # 工具函数
+│   │   ├── logger.py              # 日志
+│   │   ├── path_setup.py          # PATH 设置
+│   │   ├── resilience.py          # 重试辅助
+│   │   └── task_manager.py        # 异步任务辅助
+│   ├── tests/                     # 单元测试
+│   └── data/                      # 持久化数据（git忽略）
+│       ├── shadow.db              # SQLite 数据库
+│       └── storage/               # 文件存储
+├── frontend/
+│   ├── index.html                 # 主页面
+│   ├── admin.html                 # 管理面板
+│   ├── js/
+│   │   ├── app.js                 # Vue 3 应用
+│   │   ├── router.js              # 哈希路由
+│   │   ├── api.js                 # API 客户端
+│   │   ├── player.js              # 统一播放器
+│   │   ├── subtitles.js           # 字幕渲染
+│   │   └── mock.js                # 模拟数据
+│   ├── css/style.css              # 自定义样式
+│   ├── service-worker.js          # PWA 离线支持
+│   └── tests/                     # Playwright 测试
+├── pyproject.toml                 # 后端依赖
+└── package.json                   # 前端依赖
 ```
 
-**方法 B: 使用 uv 环境 (推荐)**
-如果你只安装了 uv，可以直接利用后端的环境来启动：
+## 功能特性
+
+1. **双视频输入**：YouTube 链接或本地文件上传（支持拖拽）
+2. **词级时间戳**：Whisper 转录带每个词的时间戳
+3. **假名注音**：使用 MeCab 自动生成日语读音
+4. **中文翻译**：通过 Google Gemini API 进行批量翻译
+5. **用户字幕支持**：上传 SRT 文件与 AI 时间戳对齐
+6. **交互式播放**：点击任意单词跳转到该位置
+7. **PWA 支持**：可安装，支持离线使用
+8. **管理面板**：管理用户、资产和字幕轨道
+9. **速率限制**：可配置的 API 速率限制
+10. **会话管理**：匿名上传会话，支持 TTL 和限制
+
+## 环境准备
+
+- **Python 3.11+**
+- **FFmpeg**（音视频处理）
+- **uv**（Python 包管理器，推荐）
+- **Google Gemini API Key**（用于翻译）
+
+### FFmpeg 安装
+
+**Windows**：从 [ffmpeg.org](https://ffmpeg.org/download.html) 下载，解压并将 `bin` 目录添加到系统 PATH。
+
+**Linux**：
 ```bash
-# 在 backend 目录下运行
+sudo apt install ffmpeg
+# 或使用提供的脚本：
+cd backend && python setup_ffmpeg.py
+```
+
+**macOS**：
+```bash
+brew install ffmpeg
+```
+
+## 安装步骤
+
+### 1. 安装后端依赖
+
+```bash
+cd backend
+uv sync
+```
+
+### 2. 配置环境变量
+
+在 `backend` 目录创建 `.env` 文件：
+
+```bash
+cp .env.example .env
+# 编辑 .env 文件
+```
+
+必需变量：
+- `GEMINI_API_KEY` - Google Gemini API Key
+
+可选变量：
+- `WHISPER_MODEL_SIZE` - Whisper 模型大小（tiny/base/small/medium/large，默认：base）
+- `WHISPER_DEVICE` - GPU/CPU 选择（cuda/cpu/None 自动）
+- `ADMIN_USERNAME` - 管理面板用户名
+- `ADMIN_PASSWORD` - 管理面板密码
+
+完整变量列表见[环境变量](#环境变量)部分。
+
+### 3. 安装前端依赖（用于测试）
+
+```bash
+cd frontend
+npm install
+```
+
+## 运行应用
+
+### 启动后端
+
+```bash
+cd backend
+export GEMINI_API_KEY="your_api_key"
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+**可选参数**：
+- `--no-rate-limit` - 禁用速率限制（测试时有用）
+- `--host` - 绑定地址（默认：0.0.0.0）
+- `--port` - 端口（默认：8000）
+- `--reload` - 代码更改时自动重载
+
+### 启动前端
+
+```bash
+cd frontend
+python3 -m http.server 3000
+```
+
+或使用 uv 从 backend 目录启动：
+```bash
 cd backend
 uv run python -m http.server --directory ../frontend 3000
 ```
 
-启动后，打开浏览器访问 `http://localhost:3000`。
+### 访问地址
 
-## 功能说明
-*   **输入**: YouTube 视频链接 (例如 `https://www.youtube.com/watch?v=...`)。
-*   **处理**: 后端会自动下载音频、使用 Whisper 识别、MeCab 分词注音、Gemini 翻译。
-*   **跟读**:
-    *   **日语栏**: 显示汉字和假名。播放时，当前朗读的单词会高亮显示。
-    *   **翻译栏**: 显示中文翻译。
-    *   **交互**: 点击任意单词，视频会跳转到该单词开始的时间。
+- **主应用**：http://localhost:3000
+- **API**：http://localhost:8000
+- **管理面板**：http://localhost:3000/admin.html（需要 ADMIN_USERNAME/PASSWORD）
+
+## 环境变量
+
+| 变量 | 描述 | 默认值 |
+|------|------|--------|
+| `GEMINI_API_KEY` | Google Gemini API Key（翻译用） | 必需 |
+| `GEMINI_MODEL_ID` | Gemini 模型 ID | `gemini-3-flash-preview` |
+| `DATABASE_URL` | 数据库连接字符串 | `sqlite:///./data/shadow.db` |
+| `STORAGE_ROOT_DIR` | 文件存储根目录 | `data/storage` |
+| `WHISPER_MODEL_SIZE` | Whisper 模型大小 | `base` |
+| `WHISPER_DEVICE` | GPU/CPU 设备（cuda/cpu/None） | `None`（自动） |
+| `WHISPER_FP16` | 使用半精度推理 | `false` |
+| `WHISPER_CONDITION_ON_PREVIOUS_TEXT` | 基于前文条件推理 | `false` |
+| `WHISPER_HALLUCINATION_SILENCE_THRESHOLD` | 跳过幻觉静音（秒） | `None` |
+| `TRANSLATE_BATCH_CHUNK_SIZE` | 翻译批次大小 | `50` |
+| `SUBTITLE_SIMILARITY_THRESHOLD` | 用户字幕相似度阈值 | `0.1` |
+| `HTTP_PROXY` / `HTTPS_PROXY` | YouTube 下载代理设置 | `None` |
+| `UPLOAD_SESSION_TTL_SECONDS` | 分块上传会话 TTL | `600` |
+| `UPLOAD_SESSION_SWEEP_SECONDS` | 上传清理间隔 | `60` |
+| `AUTH_SESSION_TTL_SECONDS` | 认证会话 TTL（秒） | `3600` |
+| `AUTH_SESSION_MAX_UPLOADS` | 每会话最大上传数 | `5` |
+| `AUTH_SESSION_MAX_TOTAL_SIZE` | 每会话最大上传大小（字节） | `524288000` (500MB) |
+| `RATE_LIMIT_ENABLED` | 启用速率限制 | `true` |
+| `RATE_LIMIT_DEFAULT_REQUESTS_PER_MINUTE` | 默认速率限制 | `60` |
+| `RATE_LIMIT_HEALTH_CHECK_PER_MINUTE` | 健康检查速率限制 | `120` |
+| `RATE_LIMIT_STATUS_PER_MINUTE` | 状态轮询速率限制 | `120` |
+| `RATE_LIMIT_UPLOAD_PER_MINUTE` | 上传速率限制 | `5` |
+| `RATE_LIMIT_PROCESS_PER_MINUTE` | 处理端点速率限制 | `5` |
+| `ADMIN_USERNAME` | 管理面板用户名 | `None` |
+| `ADMIN_PASSWORD` | 管理面板密码 | `None` |
+
+## API 端点
+
+### 认证
+- `POST /api/session` - 创建匿名上传会话
+
+### 视频处理
+- `POST /api/process` - 处理 YouTube 链接（异步）
+- `GET /api/status/{task_id}` - 获取任务状态
+
+### 文件上传
+- `POST /api/upload` - 简单上传（小文件）
+- `POST /api/upload/init` - 初始化分块上传
+- `POST /api/upload/chunk` - 上传文件块
+- `POST /api/upload/subtitle` - 为分块上传会话上传字幕
+- `POST /api/upload/complete` - 完成分块上传
+
+### 资源访问
+- `GET /api/assets/{asset_id}` - 获取资源或资源列表
+- `GET /api/assets/{asset_id}/stream` - 流式传输上传的视频
+
+### 健康检查
+- `GET /` - API 心跳
+- `GET /health` - 综合健康检查
+
+### 管理接口（需要 `X-Admin-Session-Id` 头）
+- `POST /api/admin/login` - 管理员登录
+- `POST /api/admin/logout` - 管理员登出
+- `GET /api/admin/users` - 列出用户
+- `DELETE /api/admin/users/{user_id}` - 删除用户
+- `GET /api/admin/assets` - 列出资源
+- `DELETE /api/admin/assets/{asset_id}` - 删除资源
+- `GET /api/admin/subtitle-tracks` - 列出字幕轨道
+- `DELETE /api/admin/subtitle-tracks/{track_id}` - 删除字幕轨道
+
+## 处理流水线
+
+### 标准流水线（无用户字幕）
+```
+输入（YouTube 链接或文件）
+  → 检查缓存（SubtitleTrack 数据库）
+  → [缓存命中] 返回缓存结果
+  → [缓存未命中] 下载音视频
+  → Whisper 转录（词级时间戳）
+  → 日语形态学分析 + 假名注音
+  → 批量翻译成中文
+  → 保存到数据库
+  → 返回带交互单词的片段
+```
+
+### 带用户字幕的流水线
+```
+输入（文件 + 用户 SRT）
+  → 检查缓存
+  → [缓存未命中] Whisper 转录获取时间戳参考
+  → 加载用户字幕
+  → 去重滚动字幕
+  → 检查与 AI 字幕的相似度
+  → 对齐和校准时间戳
+  → 日语分析 + 假名注音
+  → 批量翻译成中文
+  → 保存到数据库
+  → 返回片段（仅片段级，无词级）
+```
+
+## 测试
+
+### 后端测试
+
+```bash
+cd backend
+uv run pytest tests/
+```
+
+### 前端测试（Playwright）
+
+```bash
+cd frontend
+npm test              # 运行所有测试（无头模式）
+npm run test:headed   # 显示浏览器运行
+npm run test:ui       # 使用 Playwright UI 运行
+```
+
+**注意**：前端测试需要同时运行前端（端口 3000）和后端（端口 8000）服务器。如果未运行，Playwright 配置会自动启动它们。
+
+## 开发
+
+### 代码格式化和质量检查
+
+```bash
+cd backend
+uv run ruff check --fix .   # 检查并修复 linting
+uv run ruff format .        # 格式化代码
+uv run pyright              # 类型检查
+```
+
+### 架构说明
+
+项目遵循模块化架构：
+- **Routes**：带端点级速率限制的 API 端点
+- **Services**：业务逻辑（下载、转录、翻译等）
+- **Database**：SQLModel ORM + SQLite（可轻松迁移到 PostgreSQL）
+- **Storage**：本地和未来云存储的抽象层
+
+### 前端开发
+
+前端使用：
+- **Vue 3** 构建响应式 UI
+- **Tailwind CSS**（CDN）进行样式设计
+- **基于哈希的路由**实现 SPA 导航
+- **统一播放器接口**支持 YouTube 和本地上传
+
+## 许可证
+
+MIT License
