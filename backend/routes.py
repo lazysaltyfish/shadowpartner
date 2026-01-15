@@ -725,8 +725,13 @@ async def stream_asset(request: Request, asset_id: str):
         # Get file info
         file_size = os.path.getsize(full_path)
         ext = asset.meta.get("original_ext", ".mp3") if asset.meta else ".mp3"
-        mime_type, _ = mimetypes.guess_type(f"file{ext}")
-        mime_type = mime_type or "application/octet-stream"
+
+        # Special handling for m4a files - use audio/mp4 or audio/x-m4a
+        if ext.lower() == ".m4a":
+            mime_type = "audio/mp4"
+        else:
+            mime_type, _ = mimetypes.guess_type(f"file{ext}")
+            mime_type = mime_type or "application/octet-stream"
 
         # Handle Range request for video seeking
         range_header = request.headers.get("range")

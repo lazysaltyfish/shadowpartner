@@ -24,16 +24,26 @@ class LocalStorage(BaseStorage):
         self.root_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_hash_prefix_path(self, identifier: str) -> Path:
-        """Get path with hash prefix (first 2 chars of identifier).
+        """Get path with hash prefix (first 2 chars of hash portion).
 
         This prevents too many files in a single directory.
 
-        Example: "a1b2c3..." -> "data/storage/a1/a1b2c3..."
+        The identifier format is "upload_<hash>", where hash is a 16-char hex string.
+        We extract the hash part and use its first 2 characters as directory prefix.
+
+        Example: "upload_a1b2c3d4e5f6g7h8" -> "a1" -> "data/storage/a1/"
         """
-        if len(identifier) < 2:
+        # Extract hash part after "upload_" prefix
+        if identifier.startswith("upload_"):
+            hash_part = identifier[7:]  # Remove "upload_" prefix
+        else:
+            hash_part = identifier
+
+        # Use first 2 chars of hash as prefix
+        if len(hash_part) < 2:
             prefix = "00"
         else:
-            prefix = identifier[:2]
+            prefix = hash_part[:2]
 
         return self.root_dir / prefix
 
