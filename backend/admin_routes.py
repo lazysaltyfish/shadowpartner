@@ -62,6 +62,8 @@ class AssetResponse(BaseModel):
 class SubtitleTrackResponse(BaseModel):
     id: str
     asset_id: str
+    asset_identifier: str
+    asset_type: str
     track_type: str
     source: str
     language: str
@@ -273,6 +275,8 @@ async def list_subtitle_tracks(
             track_response = SubtitleTrackResponse(
                 id=str(track.id),
                 asset_id=str(track.asset_id),
+                asset_identifier=track.asset.identifier if track.asset else "",
+                asset_type=track.asset.type.value if track.asset else "",
                 track_type=track.track_type.value,
                 source=track.source.value,
                 language=track.language,

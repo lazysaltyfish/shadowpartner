@@ -147,7 +147,7 @@
                                 <td colspan="5" class="px-6 py-4 text-center text-gray-500">No users found</td>
                             </tr>
                             <tr v-for="user in users" :key="user.id" class="hover:bg-gray-50">
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" :title="user.id">
                                     {{ user.id.substring(0, 8) }}...
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -191,7 +191,7 @@
                                 <td colspan="7" class="px-6 py-4 text-center text-gray-500">No assets found</td>
                             </tr>
                             <tr v-for="asset in assets" :key="asset.id" class="hover:bg-gray-50">
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" :title="asset.id">
                                     {{ asset.id.substring(0, 8) }}...
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -204,10 +204,10 @@
                                         {{ asset.type === 'youtube' ? 'YouTube' : 'Upload' }}
                                     </span>
                                 </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" :title="asset.identifier">
                                     {{ asset.identifier.substring(0, 20) }}{{ asset.identifier.length > 20 ? '...' : '' }}
                                 </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" :title="asset.created_by">
                                     {{ asset.created_by ? asset.created_by.substring(0, 8) + '...' : 'N/A' }}
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -235,7 +235,7 @@
                         <thead class="bg-gray-50">
                             <tr>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Asset ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Asset</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Language</th>
@@ -249,11 +249,19 @@
                                 <td colspan="8" class="px-6 py-4 text-center text-gray-500">No subtitle tracks found</td>
                             </tr>
                             <tr v-for="track in subtitleTracks" :key="track.id" class="hover:bg-gray-50">
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" :title="track.id">
                                     {{ track.id.substring(0, 8) }}...
                                 </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">
-                                    {{ track.asset_id.substring(0, 8) }}...
+                                <td class="px-6 py-4 whitespace-nowrap text-sm" :title="track.asset_identifier">
+                                    <span
+                                        :class="[
+                                            'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium mr-2',
+                                            track.asset_type === 'youtube' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
+                                        ]"
+                                    >
+                                        {{ track.asset_type === 'youtube' ? 'YT' : 'UP' }}
+                                    </span>
+                                    <span class="text-gray-900">{{ track.asset_identifier.substring(0, 16) }}{{ track.asset_identifier.length > 16 ? '...' : '' }}</span>
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                     <span
