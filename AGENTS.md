@@ -141,6 +141,9 @@ utils/
   ├── path_setup.py            # PATH / local bin setup
   ├── resilience.py            # Retry/backoff helpers for external calls
   └── task_manager.py          # Async task helpers
+scripts/                       # Maintenance scripts
+  ├── cleanup_database.py      # Database cleanup script (orphan detection/cleanup)
+  └── migrate_storage_prefix.py  # Storage migration script (legacy)
 tests/                         # Unit tests
   ├── test_calibration.py
   ├── test_subtitle_linearizer.py
@@ -148,7 +151,8 @@ tests/                         # Unit tests
   ├── test_youtube_download.py
   ├── test_admin.py          # Admin authentication and CRUD tests
   ├── test_storage.py        # Storage abstraction unit tests (includes iter_file tests)
-  └── test_stream_asset.py  # Streaming endpoint integration tests
+  ├── test_stream_asset.py   # Streaming endpoint integration tests
+  └── test_cleanup_script.py # Database cleanup script unit tests
 services/
   ├── downloader.py            # YouTube/file download
   ├── transcriber.py           # Whisper transcription
@@ -346,6 +350,60 @@ Input (File + User SRT Subtitle)
   - Supports pagination via `limit` and `offset` query params
 - `DELETE /api/admin/subtitle-tracks/{track_id}` - Delete subtitle track
   - Requires: `X-Admin-Session-Id` header
+
+## Maintenance Scripts
+
+### Database Cleanup Script (`backend/scripts/cleanup_database.py`)
+
+A standalone CLI tool to detect and clean up orphaned database records and storage files that can accumulate due to backend bugs or manual interventions.
+
+**Types of Orphans Detected**:
+1. **Orphaned SubtitleTracks**: Records referencing non-existent assets (referential integrity violations)
+2. **Orphaned Assets**: Asset records with missing storage files (files deleted but DB records remain)
+3. **Orphaned Files**: Storage files with no corresponding database record (files not tracked in DB)
+4. **Orphaned Users**: Users with no assets (accumulated guest accounts, with optional age-based filtering)
+
+**Usage**:
+```bash
+# Dry-run to see what would be deleted (default: True unless --force is used)
+cd backend
+python scripts/cleanup_database.py --dry-run --verbose
+
+# Clean up orphaned subtitle tracks and assets only
+python scripts/cleanup_database.py --force
+
+# Clean up everything including orphaned files and users
+python scripts/cleanup_database.py --force --cleanup-orphaned-files --cleanup-orphaned-users
+
+# Clean up users older than 7 days with no assets
+python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-threshold 7
+```
+
+**CLI Arguments**:
+- `--dry-run`: Report only, don't delete (default: True)
+- `--force`: Actually perform deletions (required for any deletion)
+- `--cleanup-orphaned-files`: Clean up storage files with no database record (default: False)
+- `--cleanup-orphaned-users`: Clean up users with no assets (default: False)
+- `--user-age-threshold`: Days threshold for user cleanup (default: 30)
+- `--verbose, -v`: Detailed logging
+- `--quiet, -q`: Minimal output
+
+**Cleanup Order** (maintains referential integrity):
+1. SubtitleTracks (no dependencies)
+2. Assets (cascade to tracks)
+3. Files (no DB dependencies)
+4. Users (cascade to assets, but assets already verified)
+
+**Safety Features**:
+- Default dry-run mode requires explicit `--force` for actual deletions
+- Graceful handling of missing storage files
+- Comprehensive logging of all actions
+- Idempotent (safe to run multiple times)
+
+**Production Recommendations**:
+- Run weekly via cron: `0 2 * * 0 cd /path/to/backend && python scripts/cleanup_database.py --cleanup-orphaned-users --user-age-threshold 30`
+- Monitor cleanup statistics for anomalies (high orphan counts may indicate bugs)
+- Always backup database before running with `--force`
 
 ## Data Models
 
