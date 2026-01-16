@@ -673,3 +673,202 @@ def test_asset_falls_back_to_track_content_title(client, test_user):
     assert response.status_code == 200
     data = response.json()
     assert data["title"] == track_title
+
+
+# ==================== Storage File Deletion Tests ====================
+
+
+def test_delete_asset_deletes_storage_file(admin_client, test_user):
+    """Test that deleting an asset also deletes the storage file using storage abstraction."""
+    import asyncio
+    import io
+
+    import services_registry
+
+    # Initialize storage service if not already initialized
+    if services_registry.storage is None:
+        import lifecycle
+
+        asyncio.run(lifecycle.startup_event())
+
+    # Create a test file in storage
+    test_content = b"Test storage file content " * 50
+    file_obj = io.BytesIO(test_content)
+
+    storage = services_registry.storage
+    # Save file to storage
+    storage_path = asyncio.run(storage.save(file_obj, "upload_storage_test_123"))
+
+    # Create asset with storage path
+    with get_session() as db:
+        asset = Asset(
+            type=AssetType.UPLOAD,
+            identifier="storage_test_123",
+            storage_path=storage_path,
+            meta={"original_ext": ".mp4"},
+            created_by=test_user,
+        )
+        db.add(asset)
+        db.commit()
+        asset_id = asset.id
+
+    # Verify file exists before deletion
+    exists_before = asyncio.run(storage.exists(storage_path))
+    assert exists_before is True
+
+    # Delete asset via admin API
+    response = admin_client.delete(f"/api/admin/assets/{asset_id}")
+    assert response.status_code == 200
+
+    # Verify storage file was deleted
+    exists_after = asyncio.run(storage.exists(storage_path))
+    assert exists_after is False
+
+
+def test_delete_user_deletes_all_storage_files(admin_client):
+    """Test that deleting a user also deletes all their storage files using storage abstraction."""
+    import asyncio
+    import io
+
+    import services_registry
+
+    # Initialize storage service if not already initialized
+    if services_registry.storage is None:
+        import lifecycle
+
+        asyncio.run(lifecycle.startup_event())
+
+    storage = services_registry.storage
+
+    # Create a test user with multiple assets
+    unique_suffix = str(uuid.uuid4())[:8]
+    with get_session() as db:
+        user = get_or_create_guest_user(db, "127.0.0.1")
+        user.username = f"storage_test_user_{unique_suffix}"
+        db.commit()
+        db.refresh(user)
+        user_id = user.id
+
+        # Create 3 assets with storage files
+        storage_paths = []
+        for i in range(3):
+            test_content = f"Test content {i} ".encode() * 50
+            file_obj = io.BytesIO(test_content)
+            storage_path = asyncio.run(
+                storage.save(file_obj, f"upload_storage_user_{unique_suffix}_{i}")
+            )
+            storage_paths.append(storage_path)
+
+            asset = Asset(
+                type=AssetType.UPLOAD,
+                identifier=f"storage_user_{unique_suffix}_{i}",
+                storage_path=storage_path,
+                meta={"original_ext": ".mp4"},
+                created_by=user_id,
+            )
+            db.add(asset)
+        db.commit()
+
+    # Verify all files exist before deletion
+    for storage_path in storage_paths:
+        exists = asyncio.run(storage.exists(storage_path))
+        assert exists is True, f"File should exist before deletion: {storage_path}"
+
+    # Delete user via admin API
+    response = admin_client.delete(f"/api/admin/users/{user_id}")
+    assert response.status_code == 200
+
+    # Verify all storage files were deleted
+    for storage_path in storage_paths:
+        exists = asyncio.run(storage.exists(storage_path))
+        assert exists is False, f"File should be deleted: {storage_path}"
+
+
+def test_delete_asset_with_missing_storage_file(admin_client, test_user):
+    """Test deleting asset when storage file is already missing (should not fail)."""
+    import asyncio
+
+    import services_registry
+
+    # Initialize storage service if not already initialized
+    if services_registry.storage is None:
+        import lifecycle
+
+        asyncio.run(lifecycle.startup_event())
+
+    # Create asset with a storage path that doesn't exist
+    with get_session() as db:
+        asset = Asset(
+            type=AssetType.UPLOAD,
+            identifier="missing_file_asset",
+            storage_path="upload_nonexistent_file_xyz",
+            meta={"original_ext": ".mp4"},
+            created_by=test_user,
+        )
+        db.add(asset)
+        db.commit()
+        asset_id = asset.id
+
+    # Delete asset should succeed even if file doesn't exist
+    response = admin_client.delete(f"/api/admin/assets/{asset_id}")
+    assert response.status_code == 200
+    assert "deleted successfully" in response.json()["message"]
+
+
+def test_delete_user_with_some_missing_storage_files(admin_client):
+    """Test deleting user when some storage files are missing (should not fail)."""
+    import asyncio
+    import io
+
+    import services_registry
+
+    # Initialize storage service if not already initialized
+    if services_registry.storage is None:
+        import lifecycle
+
+        asyncio.run(lifecycle.startup_event())
+
+    storage = services_registry.storage
+
+    # Create a test user with mixed storage files
+    unique_suffix = str(uuid.uuid4())[:8]
+    with get_session() as db:
+        user = get_or_create_guest_user(db, "127.0.0.1")
+        user.username = f"partial_storage_user_{unique_suffix}"
+        db.commit()
+        db.refresh(user)
+        user_id = user.id
+
+        # Asset 1: with actual file
+        test_content = b"Existing file content " * 50
+        file_obj = io.BytesIO(test_content)
+        storage_path_1 = asyncio.run(storage.save(file_obj, f"upload_partial_{unique_suffix}_1"))
+        asset_1 = Asset(
+            type=AssetType.UPLOAD,
+            identifier=f"partial_{unique_suffix}_1",
+            storage_path=storage_path_1,
+            meta={"original_ext": ".mp4"},
+            created_by=user_id,
+        )
+        db.add(asset_1)
+
+        # Asset 2: without actual file (storage path only)
+        asset_2 = Asset(
+            type=AssetType.UPLOAD,
+            identifier=f"partial_{unique_suffix}_2",
+            storage_path="upload_nonexistent_partial_xyz",
+            meta={"original_ext": ".mp4"},
+            created_by=user_id,
+        )
+        db.add(asset_2)
+
+        db.commit()
+
+    # Delete user should succeed even with missing files
+    response = admin_client.delete(f"/api/admin/users/{user_id}")
+    assert response.status_code == 200
+    assert "deleted successfully" in response.json()["message"]
+
+    # Existing file should be deleted
+    exists_after = asyncio.run(storage.exists(storage_path_1))
+    assert exists_after is False
