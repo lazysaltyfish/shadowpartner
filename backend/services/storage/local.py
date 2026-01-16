@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 import shutil
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import BinaryIO
+
+import aiofiles
 
 from services.storage.base import BaseStorage
 from utils.logger import get_logger
@@ -12,7 +16,10 @@ logger = get_logger(__name__)
 
 
 class LocalStorage(BaseStorage):
-    """Local file system storage provider with hash-based directory structure."""
+    """Local file system storage provider with hash-based directory structure.
+
+    Uses Python native async operations (aiofiles) for optimal performance.
+    """
 
     def __init__(self, root_dir: str = "data/storage"):
         """Initialize local storage.
@@ -47,68 +54,129 @@ class LocalStorage(BaseStorage):
 
         return self.root_dir / prefix
 
-    def _get_full_path(self, identifier: str, filename: str) -> Path:
+    def _get_full_path(self, identifier: str) -> Path:
         """Get full path for a file."""
         hash_prefix_path = self._get_hash_prefix_path(identifier)
-        hash_prefix_path.mkdir(parents=True, exist_ok=True)
         return hash_prefix_path / identifier
 
-    async def save(self, file_obj: BinaryIO, identifier: str) -> str:
+    async def save(self, file_obj: BinaryIO, path: str) -> str:
         """Save file and return storage path."""
-        target_path = self._get_full_path(identifier, identifier)
+        target_path = self._get_full_path(path)
 
         # Ensure parent directory exists
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Save file
         logger.info(f"Saving file to storage: {target_path}")
 
-        def write_file():
+        def write_file() -> None:
             file_obj.seek(0)
             with open(target_path, "wb") as f:
-                shutil.copyfileobj(file_obj, f)
+                shutil.copyfileobj(file_obj, f, length=1024 * 1024)
 
         await asyncio.to_thread(write_file)
 
-        # Return relative path (identifier)
-        return str(identifier)
+        logger.info(f"Saved file to storage: {target_path}")
+        return str(path)
 
     async def get(self, path: str) -> BinaryIO:
         """Get file by path."""
-        full_path = self._get_full_path(path, path)
+        full_path = self._get_full_path(path)
 
         if not full_path.exists():
             raise FileNotFoundError(f"File not found: {full_path}")
 
         return open(full_path, "rb")
 
+    def iter_file(
+        self,
+        path: str,
+        start: int | None = None,
+        end: int | None = None,
+        chunk_size: int = 8192,
+    ) -> AsyncIterator[bytes]:
+        """Iterate file content in chunks."""
+        full_path = self._get_full_path(path)
+
+        async def iterator() -> AsyncIterator[bytes]:
+            if not full_path.exists():
+                raise FileNotFoundError(f"File not found: {full_path}")
+
+            range_start = start
+            if end is not None and range_start is None:
+                range_start = 0
+
+            remaining = None
+            if range_start is not None and end is not None:
+                remaining = end - range_start + 1
+                if remaining <= 0:
+                    return
+
+            async with aiofiles.open(full_path, "rb") as f:
+                if range_start is not None:
+                    await f.seek(range_start)
+
+                while True:
+                    if remaining is None:
+                        read_size = chunk_size
+                    else:
+                        if remaining <= 0:
+                            break
+                        read_size = min(chunk_size, remaining)
+
+                    chunk = await f.read(read_size)
+                    if not chunk:
+                        break
+                    yield chunk
+                    if remaining is not None:
+                        remaining -= len(chunk)
+
+        return iterator()
+
     async def delete(self, path: str) -> bool:
         """Delete file by path."""
-        full_path = self._get_full_path(path, path)
+        full_path = self._get_full_path(path)
 
         if not full_path.exists():
             return False
 
-        def remove_file():
-            try:
-                full_path.unlink()
-                return True
-            except Exception as e:
-                logger.warning(f"Failed to delete file {full_path}: {e}")
-                return False
+        try:
+            full_path.unlink()
+            logger.info(f"Deleted file from storage: {path}")
 
-        return await asyncio.to_thread(remove_file)
+            # Clean empty parent directories
+            parent = full_path.parent
+            if parent != self.root_dir:
+                try:
+                    parent.rmdir()  # Only removes if empty
+                except OSError:
+                    pass  # Directory not empty, ignore
+
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to delete file {path}: {e}")
+            return False
 
     async def exists(self, path: str) -> bool:
         """Check if file exists."""
-        full_path = self._get_full_path(path, path)
+        full_path = self._get_full_path(path)
+        return full_path.exists()
 
-        def check_exists():
-            return full_path.exists()
-
-        return await asyncio.to_thread(check_exists)
-
-    def get_full_path(self, path: str) -> str:
+    async def get_full_path(self, path: str) -> str:
         """Get full filesystem path for a relative path."""
-        full_path = self._get_full_path(path, path)
+        full_path = self._get_full_path(path)
         return str(full_path)
+
+    async def get_file_size(self, path: str) -> int:
+        """Get file size in bytes."""
+        full_path = self._get_full_path(path)
+
+        if not full_path.exists():
+            raise FileNotFoundError(f"File not found: {full_path}")
+
+        return full_path.stat().st_size
+
+    async def get_mime_type(self, path: str) -> str:
+        """Get MIME type for file."""
+        ext = Path(path).suffix
+        mime_type, _ = mimetypes.guess_type(f"file{ext}")
+        return mime_type or "application/octet-stream"

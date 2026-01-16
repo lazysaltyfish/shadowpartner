@@ -111,6 +111,7 @@
   - slowapi (rate limiting for API endpoints)
   - limits (rate limiting library for slowapi)
   - sqlmodel + sqlalchemy (database ORM and models)
+  - aiofiles (async file I/O for storage abstraction)
 
 ## Architecture
 
@@ -145,7 +146,9 @@ tests/                         # Unit tests
   ├── test_subtitle_linearizer.py
   ├── test_subtitle_matching.py
   ├── test_youtube_download.py
-  └── test_admin.py          # [NEW] Admin authentication and CRUD tests
+  ├── test_admin.py          # Admin authentication and CRUD tests
+  ├── test_storage.py        # Storage abstraction unit tests (includes iter_file tests)
+  └── test_stream_asset.py  # Streaming endpoint integration tests
 services/
   ├── downloader.py            # YouTube/file download
   ├── transcriber.py           # Whisper transcription
@@ -154,10 +157,10 @@ services/
   ├── translator.py            # Gemini translation
   ├── subtitle_linearizer.py   # Scrolling subtitle deduplication
   ├── video_utils.py           # Video utilities
-  └── storage/               # [NEW] Storage abstraction layer
+  └── storage/               # Storage abstraction layer (fully async)
       ├── __init__.py
-      ├── base.py             # BaseStorage abstract class
-      └── local.py            # LocalStorage implementation (hash-based dirs)
+      ├── base.py             # BaseStorage abstract class (async interface)
+      └── local.py            # LocalStorage implementation (aiofiles, hash-based dirs)
 data/                           # [NEW] Persistent data (git ignored)
   ├── shadow.db            # SQLite database
   └── storage/             # File storage (hash-prefixed directories)
@@ -516,7 +519,11 @@ Input (File + User SRT Subtitle)
 - **Repository Pattern**: `backend/db/crud.py` isolates business logic from database implementation
 - **Asset Listing Pagination**: `get_all_assets` returns `(assets, total)` for paginated listings
 - **SQLModel Typing**: CRUD query clauses are cast for Pyright compatibility without changing runtime behavior
-- **Storage Abstraction**: `backend/services/storage/` provides unified interface for local and future cloud storage
+- **Storage Abstraction**: `backend/services/storage/` provides unified async interface for local and future cloud storage; all persistent file operations (read/write/delete/stream) use storage abstraction consistently with chunked reads. LocalStorage implementation includes:
+  - `iter_file()` method for chunked file iteration (supports Range requests for streaming)
+  - Async methods: `save()`, `get()`, `delete()`, `exists()`, `get_file_size()`, `get_mime_type()`, `get_full_path()`
+  - Hash-based storage: Files stored in `data/storage/{prefix}/{identifier}` where prefix is first 2 chars of hash
+  - Directory cleanup: Empty parent directories are removed when last file is deleted
 - **Hash-Based Storage**: Files stored in `data/storage/{prefix}/{identifier}` where prefix is first 2 chars of hash
 - **Result Caching**: Processing results cached in SubtitleTrack table; checks cache before processing
 - **Translation Guard**: Any translation failure (timeout/error/missing key) aborts processing and skips persistence

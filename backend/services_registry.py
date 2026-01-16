@@ -6,6 +6,7 @@ from typing import Optional
 from services.aligner import Aligner
 from services.analyzer import JapaneseAnalyzer
 from services.downloader import VideoDownloader
+from services.storage.base import BaseStorage
 from services.storage.local import LocalStorage
 from services.subtitle_linearizer import SubtitleLinearizer
 from services.transcriber import AudioTranscriber
@@ -24,7 +25,7 @@ analyzer: Optional[JapaneseAnalyzer] = None
 aligner: Optional[Aligner] = None
 translator: Optional[Translator] = None
 subtitle_linearizer: Optional[SubtitleLinearizer] = None
-storage: Optional[LocalStorage] = None
+storage: Optional[BaseStorage] = None
 whisper_lock: Optional[asyncio.Semaphore] = None
 whisper_lock_label = "transcription"
 
@@ -56,7 +57,8 @@ def init_services():
         aligner = Aligner()
         translator = Translator()
         subtitle_linearizer = SubtitleLinearizer()
-        storage = LocalStorage()
+        storage = LocalStorage(root_dir=settings.storage_root_dir)
+        logger.info(f"Local storage initialized: {settings.storage_root_dir}")
         whisper_lock = asyncio.Semaphore(1)
         if transcriber is not None:
             whisper_lock_label = f"{transcriber.device.upper()} transcription"

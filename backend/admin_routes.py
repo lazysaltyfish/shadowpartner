@@ -193,7 +193,7 @@ async def delete_user_endpoint(
         raise HTTPException(status_code=400, detail="Invalid user ID format")
 
     with get_session() as db:
-        if delete_user(db, user_uuid):
+        if await delete_user(db, user_uuid):
             logger.info(f"Admin {admin_session.username} deleted user {user_id}")
             return {"message": f"User {user_id} deleted successfully"}
         raise HTTPException(status_code=404, detail="User not found")
@@ -276,7 +276,7 @@ async def delete_asset_endpoint(
         raise HTTPException(status_code=400, detail="Invalid asset ID format")
 
     with get_session() as db:
-        if delete_asset(db, asset_uuid):
+        if await delete_asset(db, asset_uuid):
             logger.info(f"Admin {admin_session.username} deleted asset {asset_id}")
             return {"message": f"Asset {asset_id} deleted successfully"}
         raise HTTPException(status_code=404, detail="Asset not found")

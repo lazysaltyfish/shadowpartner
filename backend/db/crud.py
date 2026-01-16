@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import datetime
 from typing import Any, List, Optional, cast
@@ -11,25 +10,15 @@ from sqlalchemy.sql import ColumnElement
 
 import services_registry
 from db.models import Asset, AssetType, SubtitleTrack, SubtitleTrackType, User
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # ==================== User CRUD ====================
 
 
 def _as_clause(value: Any) -> ColumnElement[bool]:
     return cast(ColumnElement[bool], value)
-
-
-def _resolve_storage_path(storage_path: str) -> str:
-    if os.path.isabs(storage_path):
-        return storage_path
-    storage = services_registry.storage
-    if storage is not None:
-        try:
-            return storage.get_full_path(storage_path)
-        except Exception:
-            pass
-    prefix = storage_path[:2] if len(storage_path) >= 2 else "00"
-    return os.path.join("data", "storage", prefix, storage_path)
 
 
 def get_user_by_id(session: Session, user_id: uuid.UUID) -> Optional[User]:
@@ -168,7 +157,7 @@ def get_user_by_id_with_assets(session: Session, user_id: uuid.UUID) -> Optional
     )
 
 
-def delete_user(session: Session, user_id: uuid.UUID) -> bool:
+async def delete_user(session: Session, user_id: uuid.UUID) -> bool:
     """Delete user and all their associated assets and subtitle tracks.
 
     Args:
@@ -197,18 +186,16 @@ def delete_user(session: Session, user_id: uuid.UUID) -> bool:
     session.delete(user)
     session.commit()
 
-    # Delete storage files
-    for storage_path in storage_paths:
-        try:
-            full_path = _resolve_storage_path(storage_path)
-            if os.path.exists(full_path):
-                os.remove(full_path)
-                # Also remove directory if empty
-                dir_path = os.path.dirname(full_path)
-                if dir_path and os.path.exists(dir_path) and not os.listdir(dir_path):
-                    os.rmdir(dir_path)
-        except OSError as e:
-            print(f"Warning: Failed to delete storage file {storage_path}: {e}")
+    # Delete storage files using storage abstraction
+    storage = services_registry.storage
+    if storage:
+        for storage_path in storage_paths:
+            try:
+                success = await storage.delete(storage_path)
+                if not success:
+                    logger.warning(f"Storage file not found: {storage_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete storage file {storage_path}: {e}")
 
     return True
 
@@ -252,7 +239,7 @@ def get_asset_with_tracks(session: Session, asset_id: uuid.UUID) -> Optional[Ass
     return session.query(Asset).filter(_as_clause(Asset.id == asset_id)).first()
 
 
-def delete_asset(session: Session, asset_id: uuid.UUID) -> bool:
+async def delete_asset(session: Session, asset_id: uuid.UUID) -> bool:
     """Delete asset and all associated subtitle tracks and storage files.
 
     Args:
@@ -273,18 +260,16 @@ def delete_asset(session: Session, asset_id: uuid.UUID) -> bool:
     session.delete(asset)
     session.commit()
 
-    # Delete storage file if it exists
+    # Delete storage file using storage abstraction
     if storage_path:
-        try:
-            full_path = _resolve_storage_path(storage_path)
-            if os.path.exists(full_path):
-                os.remove(full_path)
-                # Also remove directory if empty
-                dir_path = os.path.dirname(full_path)
-                if dir_path and os.path.exists(dir_path) and not os.listdir(dir_path):
-                    os.rmdir(dir_path)
-        except OSError as e:
-            print(f"Warning: Failed to delete storage file {storage_path}: {e}")
+        storage = services_registry.storage
+        if storage:
+            try:
+                success = await storage.delete(storage_path)
+                if not success:
+                    logger.warning(f"Storage file not found: {storage_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete storage file {storage_path}: {e}")
 
     return True
 

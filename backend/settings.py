@@ -90,6 +90,8 @@ class Settings:
     auth_session_max_total_size: int
     admin_username: Optional[str]
     admin_password: Optional[str]
+    # Storage configuration
+    storage_root_dir: str
 
     @property
     def proxy(self) -> Optional[str]:
@@ -128,4 +130,5 @@ def get_settings() -> Settings:
         auth_session_max_total_size=_parse_int("AUTH_SESSION_MAX_TOTAL_SIZE", 524288000),
         admin_username=_get_env("ADMIN_USERNAME"),
         admin_password=_get_env("ADMIN_PASSWORD"),
+        storage_root_dir=_get_env("STORAGE_ROOT_DIR") or "data/storage",
     )

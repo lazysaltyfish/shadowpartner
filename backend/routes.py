@@ -683,6 +683,7 @@ async def stream_asset(request: Request, asset_id: str):
     """Stream media file for uploaded assets (public endpoint for play page).
 
     Supports HTTP Range requests for video seeking.
+    Uses storage abstraction for cloud compatibility.
 
     Args:
         asset_id: Asset UUID
@@ -713,75 +714,66 @@ async def stream_asset(request: Request, asset_id: str):
         if not asset.storage_path:
             raise HTTPException(status_code=404, detail="File not found")
 
-        # Get storage service and file path
-        storage = services_registry.storage
-        if storage is None:
-            raise HTTPException(status_code=500, detail="Storage service not available")
+        # Store values needed outside the session context
+        storage_path = asset.storage_path
+        asset_meta = asset.meta
 
-        full_path = storage.get_full_path(asset.storage_path)
-        if not os.path.exists(full_path):
-            raise HTTPException(status_code=404, detail="File not found in storage")
+    # Get storage service
+    storage = services_registry.storage
+    if storage is None:
+        raise HTTPException(status_code=500, detail="Storage service not available")
 
-        # Get file info
-        file_size = os.path.getsize(full_path)
-        ext = asset.meta.get("original_ext", ".mp3") if asset.meta else ".mp3"
+    # Check file exists using storage abstraction
+    if not await storage.exists(storage_path):
+        raise HTTPException(status_code=404, detail="File not found in storage")
 
-        # Special handling for m4a files - use audio/mp4 or audio/x-m4a
-        if ext.lower() == ".m4a":
-            mime_type = "audio/mp4"
-        else:
-            mime_type, _ = mimetypes.guess_type(f"file{ext}")
-            mime_type = mime_type or "application/octet-stream"
+    # Get file size using storage abstraction
+    file_size = await storage.get_file_size(storage_path)
 
-        # Handle Range request for video seeking
-        range_header = request.headers.get("range")
+    # Get MIME type from original extension to avoid identifier-only paths
+    ext = asset_meta.get("original_ext", ".mp3") if asset_meta else ".mp3"
 
-        if range_header:
-            range_match = re.match(r"bytes=(\d+)-(\d*)", range_header)
-            if range_match:
-                start = int(range_match.group(1))
-                end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
-                end = min(end, file_size - 1)
+    # Special handling for m4a files - use audio/mp4
+    if ext.lower() == ".m4a":
+        mime_type = "audio/mp4"
+    else:
+        mime_type, _ = mimetypes.guess_type(f"file{ext}")
+        mime_type = mime_type or "application/octet-stream"
 
-                if start >= file_size:
-                    raise HTTPException(status_code=416, detail="Range not satisfiable")
+    # Handle Range request for video seeking
+    range_header = request.headers.get("range")
 
-                content_length = end - start + 1
+    if range_header:
+        range_match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+            end = min(end, file_size - 1)
 
-                def iter_range():
-                    with open(full_path, "rb") as f:
-                        f.seek(start)
-                        remaining = content_length
-                        while remaining > 0:
-                            chunk_size = min(8192, remaining)
-                            chunk = f.read(chunk_size)
-                            if not chunk:
-                                break
-                            remaining -= len(chunk)
-                            yield chunk
+            if start >= file_size:
+                raise HTTPException(status_code=416, detail="Range not satisfiable")
 
-                return StreamingResponse(
-                    iter_range(),
-                    status_code=206,
-                    media_type=mime_type,
-                    headers={
-                        "Content-Range": f"bytes {start}-{end}/{file_size}",
-                        "Accept-Ranges": "bytes",
-                        "Content-Length": str(content_length),
-                    },
-                )
+            content_length = end - start + 1
 
-        # Full file response
-        def iter_file():
-            with open(full_path, "rb") as f:
-                while chunk := f.read(8192):
-                    yield chunk
+            # Stream file content using storage abstraction
+            content = storage.iter_file(storage_path, start=start, end=end, chunk_size=8192)
+            return StreamingResponse(
+                content,
+                status_code=206,
+                media_type=mime_type,
+                headers={
+                    "Content-Range": f"bytes {start}-{end}/{file_size}",
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(content_length),
+                },
+            )
 
-        return StreamingResponse(
-            iter_file(),
-            media_type=mime_type,
-            headers={
-                "Accept-Ranges": "bytes",
-                "Content-Length": str(file_size),
-            },
-        )
+    # Full file response using storage abstraction
+    return StreamingResponse(
+        storage.iter_file(storage_path, chunk_size=8192),
+        media_type=mime_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+        },
+    )
