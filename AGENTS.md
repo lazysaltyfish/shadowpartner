@@ -602,7 +602,7 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 - **Similarity Checking**: Validates user-provided subtitles against generated ones
 - **Video ID Hashing**: Uploaded files get hashed video IDs for uniqueness
 - **YouTube Player Sizing**: Frontend CSS enforces a 16:9 aspect ratio and iframe fill for `#youtube-player` to avoid collapsed embed height.
-- **Play Page State**: Play-page loads reset playback/segment state; word highlighting respects per-asset `has_word_timestamps`; router init is non-blocking on health check while API base URL updates are propagated to the shared API client.
+- **Play Page State**: Play-page loads reset playback/segment state; word highlighting respects per-asset `has_word_timestamps`; router init waits for API base URL resolution to avoid failed direct loads; health check only updates the status indicator.
 - **Frontend Docs**: Key frontend workflow functions and modules include JSDoc for easier navigation and maintenance.
 - **Rate Limiting**: Implemented using slowapi (0.1.9) library with in-memory storage; different endpoints have different limits:
   - `/api/process`: 5/minute (expensive operation)

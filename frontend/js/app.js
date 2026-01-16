@@ -24,6 +24,7 @@ createApp({
         });
         const taskStatus = ref(null); // { status: 'pending', progress: 0, message: '' }
         const apiBaseUrl = ref('http://localhost:8000');
+        const apiReady = ref(false);
         const sessionId = ref(null);
         const SESSION_STORAGE_KEY = 'shadowpartner_session_id';
         const SESSION_HEADER_NAME = 'X-Session-Id';
@@ -85,70 +86,53 @@ createApp({
         let healthCheckIntervalId = null;
 
         /**
-         * Persist and apply a manually entered backend base URL.
+         * Resolve the backend base URL and initialize the API client.
          */
-        const manualUpdateBaseUrl = () => {
-            console.log('Manually updating API Base URL to:', apiBaseUrl.value);
-            // Remove trailing slash if present
-            if (apiBaseUrl.value.endsWith('/')) {
-                apiBaseUrl.value = apiBaseUrl.value.slice(0, -1);
+        const resolveApiBaseUrl = () => {
+            let baseUrl = 'http://localhost:8000';
+
+            // Codespaces & Remote Environment Handling
+            console.log('[Debug] Current Hostname:', window.location.hostname);
+
+            if (window.location.hostname.includes('github.dev') || window.location.hostname.includes('gitpod.io')) {
+                // GitHub Codespaces: port 8080 is usually the frontend, backend on 8000
+                const currentHost = window.location.hostname;
+                console.log('[Debug] Detected Codespace/Gitpod environment');
+
+                // Attempt to replace ANY port number in the hostname with -8000
+                // Regex looks for -<digits> followed by the domain suffix or end of string
+                // Typical format: name-8080.app.github.dev
+                const portRegex = /-([0-9]+)(?=\.app\.github\.dev|\.preview\.app\.github\.dev|\.gitpod\.io)/;
+                const match = currentHost.match(portRegex);
+
+                if (match) {
+                    const currentPort = match[1];
+                    console.log(`[Debug] Detected running on port: ${currentPort}`);
+                    baseUrl = `https://${currentHost.replace(`-${currentPort}`, '-8000')}`;
+                } else if (currentHost.includes('-8080')) {
+                    // Fallback for simple match
+                    baseUrl = `https://${currentHost.replace('-8080', '-8000')}`;
+                } else {
+                    console.warn('[Debug] Codespaces detected but port pattern not matched. Defaulting to localhost:8000. Host:', currentHost);
+                }
+            } else if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                // Generic remote handling (e.g. LAN)
+                baseUrl = window.location.protocol + '//' + window.location.hostname + ':8000';
             }
-            localStorage.setItem('shadowpartner_api_url', apiBaseUrl.value);
-            if (window.API) {
-                API.setBaseUrl(apiBaseUrl.value);
-            }
-            checkBackendHealth();
+
+            apiBaseUrl.value = baseUrl;
+            API.setBaseUrl(apiBaseUrl.value);
+            localStorage.removeItem('shadowpartner_api_url');
+            apiReady.value = true;
         };
 
         // Backend Health Check
         /**
-         * Resolve the backend base URL and update health status.
+         * Update backend health indicator only.
          * @returns {Promise<void>}
          */
         const checkBackendHealth = async () => {
             try {
-                // If user has manually set a URL, prioritize it
-                const storedUrl = localStorage.getItem('shadowpartner_api_url');
-                if (storedUrl) {
-                     apiBaseUrl.value = storedUrl;
-                } else {
-                    let baseUrl = 'http://localhost:8000';
-                    
-                    // Codespaces & Remote Environment Handling
-                    console.log('[Debug] Current Hostname:', window.location.hostname);
-                    
-                    if (window.location.hostname.includes('github.dev') || window.location.hostname.includes('gitpod.io')) {
-                         // GitHub Codespaces: port 8080 is usually the frontend, backend on 8000
-                         const currentHost = window.location.hostname;
-                         console.log('[Debug] Detected Codespace/Gitpod environment');
-                         
-                         // Attempt to replace ANY port number in the hostname with -8000
-                         // Regex looks for -<digits> followed by the domain suffix or end of string
-                         // Typical format: name-8080.app.github.dev
-                         const portRegex = /-([0-9]+)(?=\.app\.github\.dev|\.preview\.app\.github\.dev|\.gitpod\.io)/;
-                         const match = currentHost.match(portRegex);
-                         
-                         if (match) {
-                            const currentPort = match[1];
-                            console.log(`[Debug] Detected running on port: ${currentPort}`);
-                            baseUrl = `https://${currentHost.replace(`-${currentPort}`, '-8000')}`;
-                         } else if (currentHost.includes('-8080')) {
-                             // Fallback for simple match
-                             baseUrl = `https://${currentHost.replace('-8080', '-8000')}`;
-                         } else {
-                             console.warn('[Debug] Codespaces detected but port pattern not matched. Defaulting to localhost:8000. Host:', currentHost);
-                         }
-                    } else if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-                        // Generic remote handling (e.g. LAN)
-                        baseUrl = window.location.protocol + '//' + window.location.hostname + ':8000';
-                    }
-                    
-                    apiBaseUrl.value = baseUrl;
-                }
-
-                if (window.API) {
-                    API.setBaseUrl(apiBaseUrl.value);
-                }
                 console.log('Checking backend health at:', apiBaseUrl.value);
                 const response = await fetch(`${apiBaseUrl.value}/health`, {
                     credentials: 'include'
@@ -586,9 +570,10 @@ createApp({
             }
         });
 
-        // Start checking on mount
-        onMounted(() => {
-            // Initialize router immediately (don't wait for health check)
+        const initApp = () => {
+            resolveApiBaseUrl();
+
+            // Initialize router after base URL is ready.
             Router.onRouteChange = handleRouteChange;
             Router.init();
 
@@ -596,12 +581,14 @@ createApp({
             window.addEventListener('beforeunload', cleanup);
 
             // Health check runs in background (non-blocking)
-            checkBackendHealth().then(() => {
-                API.setBaseUrl(apiBaseUrl.value);
-                console.log('[App] API base URL set to:', apiBaseUrl.value);
-            });
+            checkBackendHealth();
             // Poll every 30 seconds
             healthCheckIntervalId = setInterval(checkBackendHealth, 30000);
+        };
+
+        // Start checking on mount
+        onMounted(() => {
+            initApp();
         });
 
         // Cleanup on unmount
@@ -1485,8 +1472,8 @@ createApp({
             subtitleInput,
             backendStatus,
             apiBaseUrl,
-            manualUpdateBaseUrl,
             checkBackendHealth,
+            apiReady,
             taskStatus,
             dictation,
             targetPauseTime,
