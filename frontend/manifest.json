@@ -1,7 +1,7 @@
 {
   "name": "ShadowPartner 影子跟读",
   "short_name": "ShadowPartner",
-  "start_url": "./index.html",
+  "start_url": "./#/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#2563eb",

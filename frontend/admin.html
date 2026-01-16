@@ -625,12 +625,16 @@
                     }
                 };
 
+                const getAppBaseUrl = () => new URL('./', window.location.href).href;
+
                 const openPlayPage = (asset) => {
-                    window.open(`index.html#/play/${asset.id}`, '_blank');
+                    const appBaseUrl = getAppBaseUrl();
+                    window.open(`${appBaseUrl}#/play/${asset.id}`, '_blank');
                 };
 
                 const goToUpload = () => {
-                    window.location.href = 'index.html#/upload';
+                    const appBaseUrl = getAppBaseUrl();
+                    window.location.href = `${appBaseUrl}#/upload`;
                 };
 
                 const openEditModal = async (asset) => {

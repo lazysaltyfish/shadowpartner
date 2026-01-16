@@ -45,6 +45,19 @@ const Router = {
     },
 
     /**
+     * Normalize URLs that include index.html to keep routes consistent.
+     */
+    normalizeUrl() {
+        if (!window.location.pathname.endsWith('/index.html')) {
+            return;
+        }
+
+        const normalizedPath = window.location.pathname.replace(/\/index\.html$/, '/');
+        const newUrl = normalizedPath + window.location.search + window.location.hash;
+        window.history.replaceState(null, '', newUrl);
+    },
+
+    /**
      * Navigate to a path
      * @param {string} path - Path to navigate to (e.g., '/play/uuid')
      */
@@ -97,6 +110,7 @@ const Router = {
      * Initialize router and start listening for hash changes
      */
     init() {
+        this.normalizeUrl();
         window.addEventListener('hashchange', () => this.handleRoute());
         this.handleRoute(); // Handle initial route
     },

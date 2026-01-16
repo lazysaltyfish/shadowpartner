@@ -639,6 +639,7 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
   - Modular architecture: `router.js`, `api.js`, `player.js`, `subtitles.js`
   - Unified player interface supports both YouTube IFrame API and ArtPlayer
   - Direct URL access to play page via `#/play/{asset_id}` supported
+  - URL normalization strips `/index.html` to keep hash routes consistent; PWA `start_url` uses `/#/`
 
 ## Running the Application
 

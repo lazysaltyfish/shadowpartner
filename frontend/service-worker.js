@@ -1,5 +1,6 @@
 const CACHE_NAME = 'shadow-partner-v1';
 const urlsToCache = [
+  './',
   './index.html',
   './css/style.css',
   './js/app.js',
