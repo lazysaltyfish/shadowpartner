@@ -121,6 +121,20 @@ test.describe('Play Page - Player Initialization', () => {
       expect(box.height).toBeGreaterThan(50);
     }
   });
+
+  test('should render a player element after reload', async ({ page }) => {
+    await page.goto(`/#/play/${testAssetId}`);
+    await page.waitForTimeout(3000);
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3000);
+
+    const hasError = await page.locator('text=返回首页').isVisible().catch(() => false);
+    const playerElement = page.locator('#youtube-player iframe, .artplayer-app');
+    const hasPlayerElement = (await playerElement.count()) > 0;
+
+    expect(hasError || hasPlayerElement).toBeTruthy();
+  });
 });
 
 test.describe('Play Page - Error Handling', () => {
@@ -149,5 +163,44 @@ test.describe('Play Page - Error Handling', () => {
       // Should be back at home
       await expect(page).toHaveURL(/\/#?\/?$/);
     }
+  });
+});
+
+test.describe('Play Page - Render Gating', () => {
+  const testAssetId = 'cfd555cd-bafc-4415-93e6-c794dacddbf8';
+
+  test('should not flash edit or warning modals on reload', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__modalFlashSeen = false;
+      const check = () => {
+        const body = document.body;
+        if (!body) return;
+        const text = body.innerText || '';
+        if (text.includes('编辑视频信息') || text.includes('字幕匹配警告')) {
+          window.__modalFlashSeen = true;
+        }
+      };
+      const observer = new MutationObserver(check);
+      observer.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true
+      });
+      const loop = () => {
+        check();
+        requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
+    });
+
+    await page.goto(`/#/play/${testAssetId}`);
+    await page.waitForTimeout(1000);
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+
+    const flashSeen = await page.evaluate(() => window.__modalFlashSeen);
+    expect(flashSeen).toBeFalsy();
   });
 });

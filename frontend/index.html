@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ShadowPartner - 影子跟读</title>
+    <style>[v-cloak]{display:none!important;}</style>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Custom CSS -->
@@ -14,8 +15,8 @@
     <link rel="manifest" href="manifest.json">
 </head>
 <body class="bg-gray-100 h-screen flex flex-col">
-    <div id="app" class="container mx-auto p-4 flex-1 flex flex-col">
-        <div v-if="!apiReady" class="flex-1 flex items-center justify-center">
+    <div id="app" v-cloak class="container mx-auto p-4 flex-1 flex flex-col">
+        <div v-if="!appReady" class="flex-1 flex items-center justify-center">
             <div class="text-center">
                 <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-3"></div>
                 <p class="text-gray-600">初始化中...</p>

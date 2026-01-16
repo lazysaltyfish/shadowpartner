@@ -25,6 +25,8 @@ createApp({
         const taskStatus = ref(null); // { status: 'pending', progress: 0, message: '' }
         const apiBaseUrl = ref('http://localhost:8000');
         const apiReady = ref(false);
+        const routeReady = ref(false);
+        const appReady = computed(() => apiReady.value && routeReady.value);
         const sessionId = ref(null);
         const SESSION_STORAGE_KEY = 'shadowpartner_session_id';
         const SESSION_HEADER_NAME = 'X-Session-Id';
@@ -300,7 +302,7 @@ createApp({
             }
         };
 
-        const adminLoadData = async () => {
+        const adminLoadData = async (markReady = false) => {
             if (!adminSession.value) {
                 return;
             }
@@ -338,6 +340,9 @@ createApp({
                 adminError.value = e.message || 'Failed to load data';
             } finally {
                 adminLoading.value = false;
+                if (markReady) {
+                    routeReady.value = true;
+                }
             }
         };
 
@@ -448,8 +453,13 @@ createApp({
          * Load assets for home page grid.
          * @param {boolean} append - If true, append to existing list (infinite scroll)
          */
-        const loadHomeAssets = async (append = false) => {
-            if (homeLoading.value) return;
+        const loadHomeAssets = async (append = false, markReady = false) => {
+            if (homeLoading.value) {
+                if (markReady) {
+                    routeReady.value = true;
+                }
+                return;
+            }
             homeLoading.value = true;
             try {
                 const offset = append ? homeAssets.value.length : 0;
@@ -464,6 +474,9 @@ createApp({
                 console.error('[Home] Failed to load assets:', e);
             } finally {
                 homeLoading.value = false;
+                if (markReady) {
+                    routeReady.value = true;
+                }
             }
         };
 
@@ -477,6 +490,7 @@ createApp({
             playPageLoading.value = true;
             playPageError.value = null;
             playPageData.value = null;
+            routeReady.value = true;
 
             // Reset dictation and playback state when loading new asset
             dictation.segmentIndex = 0;
@@ -534,6 +548,8 @@ createApp({
                 console.error('[Router] Failed to load asset:', e);
                 playPageError.value = e.message;
                 playPageLoading.value = false;
+            } finally {
+                routeReady.value = true;
             }
         };
 
@@ -542,6 +558,7 @@ createApp({
 
             // Cleanup previous state
             PlayerManager.destroy();
+            routeReady.value = false;
 
             if (route === 'play' && params.assetId) {
                 loadPlayPage(params.assetId);
@@ -549,18 +566,23 @@ createApp({
                 // Reset play page state when going to upload
                 playPageData.value = null;
                 playPageError.value = null;
+                routeReady.value = true;
             } else if (route === 'admin') {
                 // Reset play page state when going to admin
                 playPageData.value = null;
                 playPageError.value = null;
                 if (adminSession.value) {
-                    adminLoadData();
+                    adminLoadData(true);
+                } else {
+                    routeReady.value = true;
                 }
             } else if (route === 'home') {
                 // Load home page assets
                 playPageData.value = null;
                 playPageError.value = null;
-                loadHomeAssets();
+                loadHomeAssets(false, true);
+            } else {
+                routeReady.value = true;
             }
         };
 
@@ -1473,7 +1495,7 @@ createApp({
             backendStatus,
             apiBaseUrl,
             checkBackendHealth,
-            apiReady,
+            appReady,
             taskStatus,
             dictation,
             targetPauseTime,

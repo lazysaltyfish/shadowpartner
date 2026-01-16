@@ -68,7 +68,7 @@
 #### Frontend Tests (E2E with Playwright)
 - **Pre-commit Requirement**: All frontend tests MUST pass before committing frontend code changes.
 - **Test Command**: Run `cd frontend && npm test` to execute all Playwright tests.
-- **Test Coverage**: Tests cover home page, admin page, play page, router, player initialization, and error handling.
+- **Test Coverage**: Tests cover home page, admin page, play page, router, player initialization (including reload), error handling, and reload modal flash gating.
 - **Test Files**:
   - `frontend/tests/admin.spec.js` - Admin login and data loading tests
   - `frontend/tests/home.spec.js` - Home page and router tests
@@ -602,7 +602,7 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 - **Similarity Checking**: Validates user-provided subtitles against generated ones
 - **Video ID Hashing**: Uploaded files get hashed video IDs for uniqueness
 - **YouTube Player Sizing**: Frontend CSS enforces a 16:9 aspect ratio and iframe fill for `#youtube-player` to avoid collapsed embed height.
-- **Play Page State**: Play-page loads reset playback/segment state; word highlighting respects per-asset `has_word_timestamps`; router init waits for API base URL resolution to avoid failed direct loads; health check only updates the status indicator.
+- **Play Page State**: Play-page loads reset playback/segment state; word highlighting respects per-asset `has_word_timestamps`; router init waits for API base URL resolution to avoid failed direct loads; UI rendering is gated on API/route readiness to avoid transient modal flashes; health check only updates the status indicator.
 - **Frontend Docs**: Key frontend workflow functions and modules include JSDoc for easier navigation and maintenance.
 - **Rate Limiting**: Implemented using slowapi (0.1.9) library with in-memory storage; different endpoints have different limits:
   - `/api/process`: 5/minute (expensive operation)
