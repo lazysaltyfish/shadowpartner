@@ -68,8 +68,9 @@
 #### Frontend Tests (E2E with Playwright)
 - **Pre-commit Requirement**: All frontend tests MUST pass before committing frontend code changes.
 - **Test Command**: Run `cd frontend && npm test` to execute all Playwright tests.
-- **Test Coverage**: Tests cover home page, play page, router, player initialization, and error handling.
+- **Test Coverage**: Tests cover home page, admin page, play page, router, player initialization, and error handling.
 - **Test Files**:
+  - `frontend/tests/admin.spec.js` - Admin login and data loading tests
   - `frontend/tests/home.spec.js` - Home page and router tests
   - `frontend/tests/playpage.spec.js` - Play page, player, and subtitle tests
 - **Running Options**:
@@ -175,7 +176,7 @@ data/                           # [NEW] Persistent data (git ignored)
 index.html                    # Main HTML with routing support
 js/
   ├── app.js                  # Vue 3 application (main entry)
-  ├── router.js               # Hash router (#/, #/upload, #/play/{asset_id})
+  ├── router.js               # Hash router (#/, #/upload, #/admin, #/play/{asset_id})
   ├── api.js                  # API client module
   ├── player.js               # Unified player (YouTube + ArtPlayer)
   ├── subtitles.js            # Subtitle rendering module
@@ -626,13 +627,13 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
   - Admin sessions have 24-hour TTL and are cleaned every 5 minutes
   - Admin can view and delete any user-uploaded content (users, assets, subtitle tracks)
   - Storage file deletions resolve relative storage paths via the storage provider (or local hashed path fallback)
-  - Frontend admin panel at `frontend/admin.html` provides tabbed interface for management
+  - Frontend admin panel lives in the main SPA at `/#/admin` with tabs for management
   - Asset identifiers in the admin assets table open the play page in a new tab
   - Admin uploads: When admin session is active, uploads are marked with `is_admin_upload=true`
   - Admin upload flow: After upload completes, edit modal appears for title/description before navigating to play page
   - Upload page shows "管理员模式" badge when admin session is detected
 - **Frontend Routing**: Hash-based SPA routing for page navigation
-  - Routes: `/` (home video grid), `/upload` (upload page), `/play/{asset_id}` (dedicated play page)
+  - Routes: `/` (home video grid), `/upload` (upload page), `/admin` (admin panel), `/play/{asset_id}` (dedicated play page)
   - Home page displays responsive video grid with infinite scroll
   - Home grid cards navigate to play page on click
   - Auto-redirect to play page after processing completes (when `asset_id` is available)
@@ -677,4 +678,4 @@ export ADMIN_PASSWORD="your_admin_password"
 uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Admin panel accessible at: http://localhost:3000/admin.html
+Admin panel accessible at: http://localhost:3000/#/admin

@@ -1,6 +1,6 @@
 /**
  * Simple Hash Router for ShadowPartner
- * Supports routes: / (home), /upload, and /play/{asset_id}
+ * Supports routes: / (home), /upload, /admin, and /play/{asset_id}
  */
 
 const Router = {
@@ -40,6 +40,11 @@ const Router = {
             return { route: 'upload', params: {} };
         }
 
+        // Match /admin route
+        if (hash === '/admin') {
+            return { route: 'admin', params: {} };
+        }
+
         // Default route (home page - TODO placeholder)
         return { route: 'home', params: {} };
     },
@@ -77,6 +82,13 @@ const Router = {
      */
     goToUpload() {
         this.navigate('/upload');
+    },
+
+    /**
+     * Go to admin page
+     */
+    goToAdmin() {
+        this.navigate('/admin');
     },
 
     /**
@@ -137,6 +149,14 @@ const Router = {
      */
     isUploadPage() {
         return this.currentRoute === 'upload';
+    },
+
+    /**
+     * Check if current route is admin page
+     * @returns {boolean}
+     */
+    isAdminPage() {
+        return this.currentRoute === 'admin';
     },
 
     /**

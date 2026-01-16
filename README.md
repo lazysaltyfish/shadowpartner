@@ -81,7 +81,6 @@ shadowpartner/
 │       └── storage/               # 文件存储
 ├── frontend/
 │   ├── index.html                 # 主页面
-│   ├── admin.html                 # 管理面板
 │   ├── js/
 │   │   ├── app.js                 # Vue 3 应用
 │   │   ├── router.js              # 哈希路由
@@ -201,7 +200,7 @@ uv run python -m http.server --directory ../frontend 3000
 
 - **主应用**：http://localhost:3000
 - **API**：http://localhost:8000
-- **管理面板**：http://localhost:3000/admin.html（需要 ADMIN_USERNAME/PASSWORD）
+- **管理面板**：http://localhost:3000/#/admin（需要 ADMIN_USERNAME/PASSWORD）
 
 ## 环境变量
 

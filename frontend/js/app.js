@@ -1,4 +1,4 @@
-const { createApp, ref, reactive, onMounted, onUnmounted, nextTick, computed } = Vue;
+const { createApp, ref, reactive, onMounted, onUnmounted, nextTick, computed, watch } = Vue;
 
 createApp({
     setup() {
@@ -57,8 +57,24 @@ createApp({
         });
         const targetPauseTime = ref(null);
 
+        // Admin panel state (SPA)
+        const adminSession = ref(API.getAdminSessionId());
+        const adminLoading = ref(false);
+        const adminError = ref(null);
+        const adminActiveTab = ref('users');
+        const adminUsers = ref([]);
+        const adminAssets = ref([]);
+        const adminSubtitleTracks = ref([]);
+        const adminShowDeleteModal = ref(false);
+        const adminDeleteTarget = ref({ type: '', id: '', identifier: '' });
+        const adminDeleting = ref(false);
+        const adminLoginForm = ref({ username: '', password: '' });
+        const adminShowEditModal = ref(false);
+        const adminEditForm = ref({ assetId: '', title: '', description: '' });
+        const adminEditSaving = ref(false);
+
         // Admin mode state
-        const isAdminMode = computed(() => API.hasAdminSession());
+        const isAdminMode = computed(() => !!adminSession.value);
         const showEditModal = ref(false);
         const editForm = ref({ assetId: '', title: '', description: '' });
         const editSaving = ref(false);
@@ -225,6 +241,213 @@ createApp({
             return response;
         };
 
+        const buildAdminHeaders = () => {
+            if (!adminSession.value) {
+                return {};
+            }
+            return { [API.ADMIN_SESSION_HEADER_NAME]: adminSession.value };
+        };
+
+        const clearAdminState = () => {
+            API.clearAdminSession();
+            adminSession.value = null;
+            adminUsers.value = [];
+            adminAssets.value = [];
+            adminSubtitleTracks.value = [];
+            adminShowDeleteModal.value = false;
+            adminDeleteTarget.value = { type: '', id: '', identifier: '' };
+            adminShowEditModal.value = false;
+            adminEditForm.value = { assetId: '', title: '', description: '' };
+        };
+
+        const adminFormatDate = (dateString) => {
+            const date = new Date(dateString);
+            return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        };
+
+        const adminHandleLogin = async () => {
+            adminLoading.value = true;
+            adminError.value = null;
+
+            try {
+                const response = await fetch(`${apiBaseUrl.value}/api/admin/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(adminLoginForm.value)
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    API.setAdminSessionId(data.session_id);
+                    adminSession.value = data.session_id;
+                    adminLoginForm.value = { username: '', password: '' };
+                    await adminLoadData();
+                } else {
+                    const errorData = await response.json();
+                    adminError.value = errorData.detail || 'Login failed';
+                }
+            } catch (e) {
+                console.error('Admin login error:', e);
+                adminError.value = e.message || 'Login failed';
+            } finally {
+                adminLoading.value = false;
+            }
+        };
+
+        const adminHandleLogout = async () => {
+            try {
+                if (adminSession.value) {
+                    await fetch(`${apiBaseUrl.value}/api/admin/logout`, {
+                        method: 'POST',
+                        headers: buildAdminHeaders()
+                    });
+                }
+            } catch (e) {
+                console.error('Admin logout error:', e);
+            } finally {
+                clearAdminState();
+                adminError.value = null;
+            }
+        };
+
+        const adminLoadData = async () => {
+            if (!adminSession.value) {
+                return;
+            }
+
+            adminLoading.value = true;
+            adminError.value = null;
+
+            try {
+                const headers = buildAdminHeaders();
+
+                if (adminActiveTab.value === 'users') {
+                    const response = await fetch(`${apiBaseUrl.value}/api/admin/users`, { headers });
+                    if (response.ok) {
+                        adminUsers.value = await response.json();
+                    } else if (response.status === 401) {
+                        clearAdminState();
+                    }
+                } else if (adminActiveTab.value === 'assets') {
+                    const response = await fetch(`${apiBaseUrl.value}/api/admin/assets`, { headers });
+                    if (response.ok) {
+                        adminAssets.value = await response.json();
+                    } else if (response.status === 401) {
+                        clearAdminState();
+                    }
+                } else if (adminActiveTab.value === 'subtitle-tracks') {
+                    const response = await fetch(`${apiBaseUrl.value}/api/admin/subtitle-tracks`, { headers });
+                    if (response.ok) {
+                        adminSubtitleTracks.value = await response.json();
+                    } else if (response.status === 401) {
+                        clearAdminState();
+                    }
+                }
+            } catch (e) {
+                console.error('Admin load data error:', e);
+                adminError.value = e.message || 'Failed to load data';
+            } finally {
+                adminLoading.value = false;
+            }
+        };
+
+        const adminConfirmDelete = (type, id, identifier) => {
+            adminDeleteTarget.value = { type, id, identifier };
+            adminShowDeleteModal.value = true;
+        };
+
+        const adminExecuteDelete = async () => {
+            adminDeleting.value = true;
+
+            try {
+                const { type, id } = adminDeleteTarget.value;
+                let endpoint = null;
+
+                if (type === 'user') {
+                    endpoint = `/api/admin/users/${id}`;
+                } else if (type === 'asset') {
+                    endpoint = `/api/admin/assets/${id}`;
+                } else if (type === 'subtitle-track') {
+                    endpoint = `/api/admin/subtitle-tracks/${id}`;
+                }
+
+                const response = await fetch(`${apiBaseUrl.value}${endpoint}`, {
+                    method: 'DELETE',
+                    headers: buildAdminHeaders()
+                });
+
+                if (response.ok) {
+                    if (type === 'user') {
+                        adminUsers.value = adminUsers.value.filter(u => u.id !== id);
+                    } else if (type === 'asset') {
+                        adminAssets.value = adminAssets.value.filter(a => a.id !== id);
+                    } else if (type === 'subtitle-track') {
+                        adminSubtitleTracks.value = adminSubtitleTracks.value.filter(t => t.id !== id);
+                    }
+                    adminShowDeleteModal.value = false;
+                } else if (response.status === 401) {
+                    clearAdminState();
+                } else {
+                    const errorData = await response.json();
+                    alert(errorData.detail || 'Delete failed');
+                }
+            } catch (e) {
+                console.error('Admin delete error:', e);
+                alert(e.message || 'Delete failed');
+            } finally {
+                adminDeleting.value = false;
+            }
+        };
+
+        const adminOpenPlayPage = (asset) => {
+            const appBaseUrl = new URL('./', window.location.href).href;
+            window.open(`${appBaseUrl}#/play/${asset.id}`, '_blank');
+        };
+
+        const adminGoToUpload = () => {
+            Router.goToUpload();
+        };
+
+        const adminOpenEditModal = async (asset) => {
+            adminEditForm.value = {
+                assetId: asset.id,
+                title: '',
+                description: ''
+            };
+            adminShowEditModal.value = true;
+
+            try {
+                const data = await API.getAssetMeta(asset.id);
+                adminEditForm.value.title = data.title || '';
+                adminEditForm.value.description = data.description || '';
+            } catch (e) {
+                console.error('Failed to fetch asset meta:', e);
+            }
+        };
+
+        const adminSaveAssetMeta = async () => {
+            adminEditSaving.value = true;
+            try {
+                await API.updateAssetMeta(adminEditForm.value.assetId, {
+                    title: adminEditForm.value.title,
+                    description: adminEditForm.value.description
+                });
+                adminShowEditModal.value = false;
+                await adminLoadData();
+            } catch (e) {
+                console.error('Admin save error:', e);
+                alert(e.message || 'Failed to save');
+            } finally {
+                adminEditSaving.value = false;
+            }
+        };
+
         // Cleanup function
         /**
          * Cleanup timers and abort in-flight requests.
@@ -342,6 +565,13 @@ createApp({
                 // Reset play page state when going to upload
                 playPageData.value = null;
                 playPageError.value = null;
+            } else if (route === 'admin') {
+                // Reset play page state when going to admin
+                playPageData.value = null;
+                playPageError.value = null;
+                if (adminSession.value) {
+                    adminLoadData();
+                }
             } else if (route === 'home') {
                 // Load home page assets
                 playPageData.value = null;
@@ -349,6 +579,12 @@ createApp({
                 loadHomeAssets();
             }
         };
+
+        watch(adminActiveTab, () => {
+            if (adminSession.value && currentRoute.value === 'admin') {
+                adminLoadData();
+            }
+        });
 
         // Start checking on mount
         onMounted(() => {
@@ -1274,6 +1510,7 @@ createApp({
             goHome: () => Router.goHome(),
             goToUpload: () => Router.goToUpload(),
             goToPlay: (assetId) => Router.goToPlay(assetId),
+            goToAdmin: () => Router.goToAdmin(),
             // Home page state
             homeAssets,
             homeLoading,
@@ -1285,7 +1522,32 @@ createApp({
             editForm,
             editSaving,
             saveEditAndNavigate,
-            skipEditAndNavigate
+            skipEditAndNavigate,
+            // Admin panel state
+            adminSession,
+            adminLoading,
+            adminError,
+            adminActiveTab,
+            adminUsers,
+            adminAssets,
+            adminSubtitleTracks,
+            adminShowDeleteModal,
+            adminDeleteTarget,
+            adminDeleting,
+            adminLoginForm,
+            adminShowEditModal,
+            adminEditForm,
+            adminEditSaving,
+            adminHandleLogin,
+            adminHandleLogout,
+            adminLoadData,
+            adminConfirmDelete,
+            adminExecuteDelete,
+            adminFormatDate,
+            adminOpenPlayPage,
+            adminGoToUpload,
+            adminOpenEditModal,
+            adminSaveAssetMeta
         };
     }
 }).mount('#app');

@@ -208,6 +208,21 @@ const API = {
     },
 
     /**
+     * Store admin session ID
+     * @param {string} id - Admin session ID
+     */
+    setAdminSessionId(id) {
+        localStorage.setItem(this.ADMIN_SESSION_STORAGE_KEY, id);
+    },
+
+    /**
+     * Clear admin session
+     */
+    clearAdminSession() {
+        localStorage.removeItem(this.ADMIN_SESSION_STORAGE_KEY);
+    },
+
+    /**
      * Check if admin session exists
      * @returns {boolean}
      */
