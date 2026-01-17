@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import JSON, Column, UniqueConstraint
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, Text, UniqueConstraint
 from sqlalchemy import Enum as SQLEnum
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -24,6 +24,17 @@ class SubtitleTrackType(str, Enum):
 class SubtitleSource(str, Enum):
     USER_UPLOAD = "user_upload"
     AI_GENERATED = "ai_generated"
+
+
+class PlaylistType(str, Enum):
+    NORMAL = "normal"
+    FAVORITES = "favorites"
+    HISTORY = "history"
+
+
+class OwnerType(str, Enum):
+    ADMIN = "admin"
+    USER = "user"
 
 
 # ==================== Models ====================
@@ -62,6 +73,11 @@ class Asset(SQLModel, table=True):
         back_populates="asset",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
     )
+    # Keep delete-orphan off: treat this collection as read-only to avoid accidental clears.
+    playlist_items: List["PlaylistAsset"] = Relationship(
+        back_populates="asset",
+        sa_relationship_kwargs={"cascade": "all, delete"},
+    )
 
 
 class SubtitleTrack(SQLModel, table=True):
@@ -80,3 +96,63 @@ class SubtitleTrack(SQLModel, table=True):
 
     # Relationships
     asset: Optional["Asset"] = Relationship(back_populates="subtitle_tracks")
+
+
+class Playlist(SQLModel, table=True):
+    __tablename__ = "playlist"  # type: ignore[reportAssignmentType]
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    title: str = Field(max_length=255)
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    cover_image: Optional[str] = Field(default=None, max_length=512)
+    playlist_type: PlaylistType = Field(
+        default=PlaylistType.NORMAL,
+        sa_column=Column(SQLEnum(PlaylistType), nullable=False),
+    )
+    owner_type: OwnerType = Field(
+        default=OwnerType.ADMIN,
+        sa_column=Column(SQLEnum(OwnerType), nullable=False),
+    )
+    owner_id: Optional[uuid.UUID] = Field(default=None, foreign_key="user.id")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column=Column(
+            DateTime,
+            default=datetime.utcnow,
+            onupdate=datetime.utcnow,
+            nullable=False,
+        ),
+    )
+
+    # Relationships
+    items: List["PlaylistAsset"] = Relationship(
+        back_populates="playlist",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+
+
+class PlaylistAsset(SQLModel, table=True):
+    __tablename__ = "playlist_asset"  # type: ignore[reportAssignmentType]
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    playlist_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("playlist.id", ondelete="CASCADE"), nullable=False),
+    )
+    asset_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("asset.id", ondelete="CASCADE"), nullable=False),
+    )
+    position: int = Field(default=0, index=True)
+    cached_title: str = Field(max_length=512)
+    cached_thumbnail: Optional[str] = Field(default=None, max_length=512)
+    added_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Relationships
+    playlist: Optional["Playlist"] = Relationship(back_populates="items")
+    asset: Optional["Asset"] = Relationship(back_populates="playlist_items")
+
+    __table_args__ = (
+        UniqueConstraint("playlist_id", "asset_id", name="uq_playlist_asset"),
+        UniqueConstraint("playlist_id", "position", name="uq_playlist_position"),
+        Index("ix_playlist_assets_position", "playlist_id", "position"),
+    )

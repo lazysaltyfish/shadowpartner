@@ -278,6 +278,208 @@ const API = {
             throw new Error(error.detail || 'Failed to update asset metadata');
         }
         return await response.json();
+    },
+
+    // ==================== Playlist Methods ====================
+
+    /**
+     * Get playlists (admin only)
+     * @returns {Promise<object>}
+     */
+    async getPlaylists() {
+        const response = await this.fetchWithAuth(`${this.baseUrl}/api/playlists`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to load playlists');
+        }
+        return await response.json();
+    },
+
+    /**
+     * Get playlist by ID (admin only)
+     * @param {string} playlistId
+     * @returns {Promise<object>}
+     */
+    async getPlaylist(playlistId) {
+        const response = await this.fetchWithAuth(`${this.baseUrl}/api/playlists/${playlistId}`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to load playlist');
+        }
+        return await response.json();
+    },
+
+    /**
+     * Create a new playlist (admin only)
+     * @param {object} data
+     * @returns {Promise<object>}
+     */
+    async createPlaylist(data) {
+        const response = await this.fetchWithAuth(`${this.baseUrl}/api/playlists`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to create playlist');
+        }
+        return await response.json();
+    },
+
+    /**
+     * Update a playlist (admin only)
+     * @param {string} playlistId
+     * @param {object} data
+     * @returns {Promise<object>}
+     */
+    async updatePlaylist(playlistId, data) {
+        const response = await this.fetchWithAuth(`${this.baseUrl}/api/playlists/${playlistId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to update playlist');
+        }
+        return await response.json();
+    },
+
+    /**
+     * Delete a playlist (admin only)
+     * @param {string} playlistId
+     * @returns {Promise<void>}
+     */
+    async deletePlaylist(playlistId) {
+        const response = await this.fetchWithAuth(`${this.baseUrl}/api/playlists/${playlistId}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to delete playlist');
+        }
+    },
+
+    /**
+     * Get playlist items (admin only)
+     * @param {string} playlistId
+     * @returns {Promise<object>}
+     */
+    async getPlaylistItems(playlistId) {
+        const response = await this.fetchWithAuth(
+            `${this.baseUrl}/api/playlists/${playlistId}/items`
+        );
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to load playlist items');
+        }
+        return await response.json();
+    },
+
+    /**
+     * Add playlist item (admin only)
+     * @param {string} playlistId
+     * @param {object} data
+     * @returns {Promise<object>}
+     */
+    async addPlaylistItem(playlistId, data) {
+        const response = await this.fetchWithAuth(
+            `${this.baseUrl}/api/playlists/${playlistId}/items`,
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            }
+        );
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to add playlist item');
+        }
+        return await response.json();
+    },
+
+    /**
+     * Update playlist item position (admin only)
+     * @param {string} playlistId
+     * @param {string} assetId
+     * @param {number} position
+     * @returns {Promise<object>}
+     */
+    async updatePlaylistItemPosition(playlistId, assetId, position) {
+        const response = await this.fetchWithAuth(
+            `${this.baseUrl}/api/playlists/${playlistId}/items/${assetId}`,
+            {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ position })
+            }
+        );
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to update playlist item');
+        }
+        return await response.json();
+    },
+
+    /**
+     * Remove playlist item (admin only)
+     * @param {string} playlistId
+     * @param {string} assetId
+     * @returns {Promise<void>}
+     */
+    async removePlaylistItem(playlistId, assetId) {
+        const response = await this.fetchWithAuth(
+            `${this.baseUrl}/api/playlists/${playlistId}/items/${assetId}`,
+            {
+                method: 'DELETE'
+            }
+        );
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to remove playlist item');
+        }
+    },
+
+    /**
+     * Get playlist context for play page (admin only)
+     * @param {string} playlistId
+     * @param {string} assetId
+     * @returns {Promise<object>}
+     */
+    async getPlaylistContext(playlistId, assetId) {
+        const response = await this.fetchWithAuth(
+            `${this.baseUrl}/api/playlists/${playlistId}/context?asset_id=${assetId}`
+        );
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to load playlist context');
+        }
+        return await response.json();
+    },
+
+    /**
+     * Search assets (admin only)
+     * @param {string} query
+     * @returns {Promise<object>}
+     */
+    async searchAssets(query) {
+        const response = await this.fetchWithAuth(
+            `${this.baseUrl}/api/assets/search?q=${encodeURIComponent(query)}`
+        );
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to search assets');
+        }
+        return await response.json();
     }
 };
 

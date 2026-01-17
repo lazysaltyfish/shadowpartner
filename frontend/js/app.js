@@ -36,6 +36,8 @@ createApp({
         const playPageData = ref(null); // Asset data for play page
         const playPageLoading = ref(false);
         const playPageError = ref(null);
+        const playlistContext = ref(null);
+        const playlistContextLoading = ref(false);
 
         // Home page state
         const homeAssets = ref([]);
@@ -75,6 +77,17 @@ createApp({
         const adminShowEditModal = ref(false);
         const adminEditForm = ref({ assetId: '', title: '', description: '' });
         const adminEditSaving = ref(false);
+        const adminPlaylists = ref([]);
+        const adminActivePlaylist = ref(null);
+        const adminPlaylistItems = ref([]);
+        const adminPlaylistView = ref('list');
+        const adminPlaylistModalOpen = ref(false);
+        const adminPlaylistForm = ref({ id: null, title: '', description: '', cover_image: '' });
+        const adminPlaylistSaving = ref(false);
+        const adminPlaylistSearchOpen = ref(false);
+        const adminPlaylistSearchQuery = ref('');
+        const adminPlaylistSearchResults = ref([]);
+        const adminPlaylistSearchLoading = ref(false);
 
         // Admin mode state
         const isAdminMode = computed(() => !!adminSession.value);
@@ -240,6 +253,17 @@ createApp({
             adminUsers.value = [];
             adminAssets.value = [];
             adminSubtitleTracks.value = [];
+            adminPlaylists.value = [];
+            adminActivePlaylist.value = null;
+            adminPlaylistItems.value = [];
+            adminPlaylistView.value = 'list';
+            adminPlaylistModalOpen.value = false;
+            adminPlaylistForm.value = { id: null, title: '', description: '', cover_image: '' };
+            adminPlaylistSaving.value = false;
+            adminPlaylistSearchOpen.value = false;
+            adminPlaylistSearchQuery.value = '';
+            adminPlaylistSearchResults.value = [];
+            adminPlaylistSearchLoading.value = false;
             adminShowDeleteModal.value = false;
             adminDeleteTarget.value = { type: '', id: '', identifier: '' };
             adminShowEditModal.value = false;
@@ -334,6 +358,14 @@ createApp({
                     } else if (response.status === 401) {
                         clearAdminState();
                     }
+                } else if (adminActiveTab.value === 'playlists') {
+                    const response = await fetch(`${apiBaseUrl.value}/api/playlists`, { headers });
+                    if (response.ok) {
+                        const data = await response.json();
+                        adminPlaylists.value = data.items || [];
+                    } else if (response.status === 401) {
+                        clearAdminState();
+                    }
                 }
             } catch (e) {
                 console.error('Admin load data error:', e);
@@ -364,6 +396,8 @@ createApp({
                     endpoint = `/api/admin/assets/${id}`;
                 } else if (type === 'subtitle-track') {
                     endpoint = `/api/admin/subtitle-tracks/${id}`;
+                } else if (type === 'playlist') {
+                    endpoint = `/api/playlists/${id}`;
                 }
 
                 const response = await fetch(`${apiBaseUrl.value}${endpoint}`, {
@@ -378,6 +412,13 @@ createApp({
                         adminAssets.value = adminAssets.value.filter(a => a.id !== id);
                     } else if (type === 'subtitle-track') {
                         adminSubtitleTracks.value = adminSubtitleTracks.value.filter(t => t.id !== id);
+                    } else if (type === 'playlist') {
+                        adminPlaylists.value = adminPlaylists.value.filter(p => p.id !== id);
+                        if (adminActivePlaylist.value && adminActivePlaylist.value.id === id) {
+                            adminActivePlaylist.value = null;
+                            adminPlaylistItems.value = [];
+                            adminPlaylistView.value = 'list';
+                        }
                     }
                     adminShowDeleteModal.value = false;
                 } else if (response.status === 401) {
@@ -437,6 +478,160 @@ createApp({
             }
         };
 
+        const adminOpenPlaylistModal = (playlist = null) => {
+            if (playlist) {
+                adminPlaylistForm.value = {
+                    id: playlist.id,
+                    title: playlist.title || '',
+                    description: playlist.description || '',
+                    cover_image: playlist.cover_image || ''
+                };
+            } else {
+                adminPlaylistForm.value = { id: null, title: '', description: '', cover_image: '' };
+            }
+            adminPlaylistModalOpen.value = true;
+        };
+
+        const adminSavePlaylist = async () => {
+            adminPlaylistSaving.value = true;
+            try {
+                const payload = {
+                    title: adminPlaylistForm.value.title,
+                    description: adminPlaylistForm.value.description || null,
+                    cover_image: adminPlaylistForm.value.cover_image || null
+                };
+                if (adminPlaylistForm.value.id) {
+                    await API.updatePlaylist(adminPlaylistForm.value.id, payload);
+                } else {
+                    await API.createPlaylist(payload);
+                }
+                adminPlaylistModalOpen.value = false;
+                await adminLoadData();
+            } catch (e) {
+                console.error('Admin playlist save error:', e);
+                alert(e.message || 'Failed to save playlist');
+            } finally {
+                adminPlaylistSaving.value = false;
+            }
+        };
+
+        const adminOpenPlaylistDetail = async (playlist) => {
+            adminActivePlaylist.value = playlist;
+            adminPlaylistView.value = 'detail';
+            await adminLoadPlaylistItems(playlist.id);
+        };
+
+        const adminOpenPlaylistPlay = async (playlist) => {
+            if (!playlist || !playlist.id) {
+                return;
+            }
+            if (!playlist.item_count) {
+                alert('Playlist is empty');
+                return;
+            }
+            try {
+                const data = await API.getPlaylistItems(playlist.id);
+                const firstItem = data.items?.[0];
+                if (!firstItem) {
+                    alert('Playlist is empty');
+                    return;
+                }
+                Router.goToPlay(firstItem.asset_id, { playlistId: playlist.id });
+            } catch (e) {
+                console.error('Failed to open playlist play page:', e);
+                alert(e.message || 'Failed to open playlist');
+            }
+        };
+
+        const adminLoadPlaylistItems = async (playlistId) => {
+            try {
+                const data = await API.getPlaylistItems(playlistId);
+                adminPlaylistItems.value = data.items || [];
+            } catch (e) {
+                console.error('Failed to load playlist items:', e);
+                alert(e.message || 'Failed to load playlist items');
+            }
+        };
+
+        const adminBackToPlaylists = () => {
+            adminActivePlaylist.value = null;
+            adminPlaylistItems.value = [];
+            adminPlaylistView.value = 'list';
+        };
+
+        const adminOpenPlaylistSearch = () => {
+            adminPlaylistSearchOpen.value = true;
+            adminPlaylistSearchQuery.value = '';
+            adminPlaylistSearchResults.value = [];
+        };
+
+        const adminSearchPlaylistAssets = async () => {
+            adminPlaylistSearchLoading.value = true;
+            try {
+                const data = await API.searchAssets(adminPlaylistSearchQuery.value || '');
+                adminPlaylistSearchResults.value = data.items || [];
+            } catch (e) {
+                console.error('Playlist search failed:', e);
+                alert(e.message || 'Search failed');
+            } finally {
+                adminPlaylistSearchLoading.value = false;
+            }
+        };
+
+        const adminAddPlaylistAsset = async (asset) => {
+            if (!adminActivePlaylist.value) {
+                return;
+            }
+            try {
+                await API.addPlaylistItem(adminActivePlaylist.value.id, {
+                    asset_id: asset.id
+                });
+                await adminLoadPlaylistItems(adminActivePlaylist.value.id);
+                adminPlaylistSearchOpen.value = false;
+            } catch (e) {
+                console.error('Failed to add playlist item:', e);
+                alert(e.message || 'Failed to add item');
+            }
+        };
+
+        const adminMovePlaylistItem = async (item, direction) => {
+            if (!adminActivePlaylist.value) {
+                return;
+            }
+            const newPosition = item.position + direction;
+            if (newPosition < 0 || newPosition >= adminPlaylistItems.value.length) {
+                return;
+            }
+            try {
+                await API.updatePlaylistItemPosition(
+                    adminActivePlaylist.value.id,
+                    item.asset_id,
+                    newPosition
+                );
+                await adminLoadPlaylistItems(adminActivePlaylist.value.id);
+            } catch (e) {
+                console.error('Failed to move playlist item:', e);
+                alert(e.message || 'Failed to reorder item');
+            }
+        };
+
+        const adminRemovePlaylistItem = async (item) => {
+            if (!adminActivePlaylist.value) {
+                return;
+            }
+            const confirmRemove = window.confirm(`Remove "${item.cached_title}"?`);
+            if (!confirmRemove) {
+                return;
+            }
+            try {
+                await API.removePlaylistItem(adminActivePlaylist.value.id, item.asset_id);
+                await adminLoadPlaylistItems(adminActivePlaylist.value.id);
+            } catch (e) {
+                console.error('Failed to remove playlist item:', e);
+                alert(e.message || 'Failed to remove item');
+            }
+        };
+
         // Cleanup function
         /**
          * Cleanup timers and abort in-flight requests.
@@ -485,11 +680,31 @@ createApp({
          * @param {string} assetId
          * @returns {Promise<void>}
          */
-        const loadPlayPage = async (assetId) => {
+        const loadPlaylistContext = async (playlistId, assetId) => {
+            playlistContextLoading.value = true;
+            try {
+                playlistContext.value = await API.getPlaylistContext(playlistId, assetId);
+            } catch (e) {
+                console.warn('[Playlist] Failed to load context:', e);
+                playlistContext.value = null;
+            } finally {
+                playlistContextLoading.value = false;
+            }
+        };
+
+        /**
+         * Load asset data for the play page and initialize the player.
+         * @param {string} assetId
+         * @param {string|null} playlistId
+         * @returns {Promise<void>}
+         */
+        const loadPlayPage = async (assetId, playlistId = null) => {
             console.log('[Router] Loading play page for asset:', assetId);
             playPageLoading.value = true;
             playPageError.value = null;
             playPageData.value = null;
+            playlistContext.value = null;
+            playlistContextLoading.value = false;
             routeReady.value = true;
 
             // Reset dictation and playback state when loading new asset
@@ -501,6 +716,9 @@ createApp({
             currentSegmentIndex.value = -1;
 
             try {
+                const playlistPromise = playlistId
+                    ? loadPlaylistContext(playlistId, assetId)
+                    : Promise.resolve();
                 const data = await API.getAsset(assetId);
                 console.log('[loadPlayPage] Asset data loaded:', data);
                 playPageData.value = data;
@@ -544,6 +762,7 @@ createApp({
                         });
                     }
                 });
+                await playlistPromise;
             } catch (e) {
                 console.error('[Router] Failed to load asset:', e);
                 playPageError.value = e.message;
@@ -551,6 +770,18 @@ createApp({
             } finally {
                 routeReady.value = true;
             }
+        };
+
+        const goToPlaylistAsset = (assetId) => {
+            if (playlistContext.value?.playlist_id) {
+                Router.goToPlay(assetId, { playlistId: playlistContext.value.playlist_id });
+                return;
+            }
+            Router.goToPlay(assetId);
+        };
+
+        const isPlaylistItemActive = (item) => {
+            return playPageData.value && playPageData.value.id === item.asset_id;
         };
 
         const handleRouteChange = (route, params) => {
@@ -561,16 +792,20 @@ createApp({
             routeReady.value = false;
 
             if (route === 'play' && params.assetId) {
-                loadPlayPage(params.assetId);
+                loadPlayPage(params.assetId, params.playlistId || null);
             } else if (route === 'upload') {
                 // Reset play page state when going to upload
                 playPageData.value = null;
                 playPageError.value = null;
+                playlistContext.value = null;
+                playlistContextLoading.value = false;
                 routeReady.value = true;
             } else if (route === 'admin') {
                 // Reset play page state when going to admin
                 playPageData.value = null;
                 playPageError.value = null;
+                playlistContext.value = null;
+                playlistContextLoading.value = false;
                 if (adminSession.value) {
                     adminLoadData(true);
                 } else {
@@ -580,6 +815,8 @@ createApp({
                 // Load home page assets
                 playPageData.value = null;
                 playPageError.value = null;
+                playlistContext.value = null;
+                playlistContextLoading.value = false;
                 loadHomeAssets(false, true);
             } else {
                 routeReady.value = true;
@@ -589,6 +826,11 @@ createApp({
         watch(adminActiveTab, () => {
             if (adminSession.value && currentRoute.value === 'admin') {
                 adminLoadData();
+            }
+            if (adminActiveTab.value !== 'playlists') {
+                adminActivePlaylist.value = null;
+                adminPlaylistItems.value = [];
+                adminPlaylistView.value = 'list';
             }
         });
 
@@ -1514,12 +1756,16 @@ createApp({
             playPageData,
             playPageLoading,
             playPageError,
+            playlistContext,
+            playlistContextLoading,
             playPageVisibleSegments,
             playPageHasWordTimestamps,
             goHome: () => Router.goHome(),
             goToUpload: () => Router.goToUpload(),
-            goToPlay: (assetId) => Router.goToPlay(assetId),
+            goToPlay: (assetId, options = {}) => Router.goToPlay(assetId, options),
             goToAdmin: () => Router.goToAdmin(),
+            goToPlaylistAsset,
+            isPlaylistItemActive,
             // Home page state
             homeAssets,
             homeLoading,
@@ -1540,6 +1786,17 @@ createApp({
             adminUsers,
             adminAssets,
             adminSubtitleTracks,
+            adminPlaylists,
+            adminActivePlaylist,
+            adminPlaylistItems,
+            adminPlaylistView,
+            adminPlaylistModalOpen,
+            adminPlaylistForm,
+            adminPlaylistSaving,
+            adminPlaylistSearchOpen,
+            adminPlaylistSearchQuery,
+            adminPlaylistSearchResults,
+            adminPlaylistSearchLoading,
             adminShowDeleteModal,
             adminDeleteTarget,
             adminDeleting,
@@ -1556,7 +1813,18 @@ createApp({
             adminOpenPlayPage,
             adminGoToUpload,
             adminOpenEditModal,
-            adminSaveAssetMeta
+            adminSaveAssetMeta,
+            adminOpenPlaylistModal,
+            adminSavePlaylist,
+            adminOpenPlaylistDetail,
+            adminOpenPlaylistPlay,
+            adminLoadPlaylistItems,
+            adminBackToPlaylists,
+            adminOpenPlaylistSearch,
+            adminSearchPlaylistAssets,
+            adminAddPlaylistAsset,
+            adminMovePlaylistItem,
+            adminRemovePlaylistItem
         };
     }
 }).mount('#app');

@@ -28,20 +28,23 @@ const Router = {
      */
     parseHash() {
         const hash = window.location.hash.slice(1) || '/';
+        const [path, queryString] = hash.split('?');
+        const params = new URLSearchParams(queryString || '');
+        const playlistId = params.get('playlist_id');
 
         // Match /play/{asset_id} (UUID format)
-        const playMatch = hash.match(/^\/play\/([a-f0-9-]{36})$/i);
+        const playMatch = path.match(/^\/play\/([a-f0-9-]{36})$/i);
         if (playMatch) {
-            return { route: 'play', params: { assetId: playMatch[1] } };
+            return { route: 'play', params: { assetId: playMatch[1], playlistId } };
         }
 
         // Match /upload route
-        if (hash === '/upload') {
+        if (path === '/upload') {
             return { route: 'upload', params: {} };
         }
 
         // Match /admin route
-        if (hash === '/admin') {
+        if (path === '/admin') {
             return { route: 'admin', params: {} };
         }
 
@@ -95,8 +98,14 @@ const Router = {
      * Go to play page
      * @param {string} assetId - Asset UUID
      */
-    goToPlay(assetId) {
-        this.navigate(`/play/${assetId}`);
+    goToPlay(assetId, options = {}) {
+        const searchParams = new URLSearchParams();
+        if (options.playlistId) {
+            searchParams.set('playlist_id', options.playlistId);
+        }
+        const suffix = searchParams.toString();
+        const path = suffix ? `/play/${assetId}?${suffix}` : `/play/${assetId}`;
+        this.navigate(path);
     },
 
     /**

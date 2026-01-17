@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import uuid
-from typing import List, Optional
+from typing import Any, List, Optional, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import desc, func
+from sqlalchemy.sql import ColumnElement
 
 from db import get_session
 from db.crud import (
@@ -18,7 +20,15 @@ from db.crud import (
     get_subtitle_track_by_asset,
     update_asset_meta,
 )
-from db.models import SubtitleTrackType
+from db.models import (
+    Asset,
+    AssetType,
+    OwnerType,
+    Playlist,
+    PlaylistAsset,
+    PlaylistType,
+    SubtitleTrackType,
+)
 from models import AdminLoginRequest
 from session_manager import (
     AdminSession,
@@ -31,6 +41,12 @@ from utils.logger import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+POSITION_OFFSET_PADDING = 1000
+
+
+def _as_clause(value: Any) -> ColumnElement[bool]:
+    return cast(ColumnElement[bool], value)
 
 
 # ==================== Request/Response Models ====================
@@ -93,6 +109,27 @@ class AssetMetaResponse(BaseModel):
 class AssetMetaUpdateRequest(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
+
+
+class PlaylistCreateRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+    cover_image: Optional[str] = None
+
+
+class PlaylistUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    cover_image: Optional[str] = None
+
+
+class PlaylistItemCreateRequest(BaseModel):
+    asset_id: str
+    position: Optional[int] = None
+
+
+class PlaylistItemUpdateRequest(BaseModel):
+    position: int
 
 
 # ==================== Admin Authentication ====================
@@ -438,3 +475,462 @@ async def delete_subtitle_track_endpoint(
             logger.info(f"Admin {admin_session.username} deleted subtitle track {track_id}")
             return {"message": f"Subtitle track {track_id} deleted successfully"}
         raise HTTPException(status_code=404, detail="Subtitle track not found")
+
+
+# ==================== Playlist Management ====================
+
+
+def _get_asset_title(db, asset: Asset) -> str:
+    meta_title = (asset.meta or {}).get("title")
+    if meta_title:
+        return meta_title
+    track = get_subtitle_track_by_asset(db, asset.id, SubtitleTrackType.PROCESSED, is_default=True)
+    if track and track.content:
+        return track.content.get("title", "")
+    return ""
+
+
+def _get_asset_thumbnail(asset: Asset) -> Optional[str]:
+    if asset.type == AssetType.YOUTUBE:
+        return f"https://img.youtube.com/vi/{asset.identifier}/mqdefault.jpg"
+    return None
+
+
+def _normalize_playlist_positions(db, items: List[PlaylistAsset]) -> None:
+    if not items:
+        return
+    max_position = max(item.position for item in items)
+    offset = max(max_position + len(items) + 1, POSITION_OFFSET_PADDING + len(items))
+    for idx, item in enumerate(items):
+        item.position = offset + idx
+    db.flush()
+    for idx, item in enumerate(items):
+        item.position = idx
+
+
+@router.get("/api/playlists")
+async def list_playlists(
+    admin_session: AdminSession = Depends(get_current_admin_session),
+    limit: int = 100,
+    offset: int = 0,
+):
+    with get_session() as db:
+        total = db.query(Playlist).count()
+        playlist_id_col = cast(Any, PlaylistAsset.playlist_id)
+        counts_subquery = (
+            db.query(
+                playlist_id_col.label("playlist_id"),
+                func.count(cast(Any, PlaylistAsset.id)).label("item_count"),
+            )
+            .group_by(playlist_id_col)
+            .subquery()
+        )
+        playlists = (
+            db.query(Playlist, func.coalesce(counts_subquery.c.item_count, 0))
+            .outerjoin(counts_subquery, counts_subquery.c.playlist_id == Playlist.id)
+            .order_by(desc(cast(Any, Playlist.created_at)))
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
+        items = []
+        for playlist, item_count in playlists:
+            items.append(
+                {
+                    "id": str(playlist.id),
+                    "title": playlist.title,
+                    "description": playlist.description,
+                    "cover_image": playlist.cover_image,
+                    "playlist_type": playlist.playlist_type.value,
+                    "owner_type": playlist.owner_type.value,
+                    "item_count": int(item_count or 0),
+                    "created_at": playlist.created_at.isoformat(),
+                    "updated_at": playlist.updated_at.isoformat(),
+                }
+            )
+        return {"items": items, "total": total}
+
+
+@router.get("/api/playlists/{playlist_id}")
+async def get_playlist(
+    playlist_id: str,
+    admin_session: AdminSession = Depends(get_current_admin_session),
+):
+    try:
+        playlist_uuid = uuid.UUID(playlist_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+
+    with get_session() as db:
+        playlist = db.get(Playlist, playlist_uuid)
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+
+        items = (
+            db.query(PlaylistAsset)
+            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .order_by(cast(Any, PlaylistAsset.position))
+            .all()
+        )
+        return {
+            "id": str(playlist.id),
+            "title": playlist.title,
+            "description": playlist.description,
+            "cover_image": playlist.cover_image,
+            "playlist_type": playlist.playlist_type.value,
+            "owner_type": playlist.owner_type.value,
+            "created_at": playlist.created_at.isoformat(),
+            "updated_at": playlist.updated_at.isoformat(),
+            "items": [
+                {
+                    "asset_id": str(item.asset_id),
+                    "position": item.position,
+                    "cached_title": item.cached_title,
+                    "cached_thumbnail": item.cached_thumbnail,
+                    "added_at": item.added_at.isoformat(),
+                }
+                for item in items
+            ],
+        }
+
+
+@router.post("/api/playlists")
+async def create_playlist(
+    request: PlaylistCreateRequest,
+    admin_session: AdminSession = Depends(get_current_admin_session),
+):
+    title = request.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+
+    with get_session() as db:
+        playlist = Playlist(
+            title=title,
+            description=request.description,
+            cover_image=request.cover_image,
+            playlist_type=PlaylistType.NORMAL,
+            owner_type=OwnerType.ADMIN,
+        )
+        db.add(playlist)
+        db.commit()
+        db.refresh(playlist)
+        return {
+            "id": str(playlist.id),
+            "title": playlist.title,
+            "description": playlist.description,
+            "cover_image": playlist.cover_image,
+            "playlist_type": playlist.playlist_type.value,
+            "owner_type": playlist.owner_type.value,
+            "created_at": playlist.created_at.isoformat(),
+            "updated_at": playlist.updated_at.isoformat(),
+        }
+
+
+@router.put("/api/playlists/{playlist_id}")
+async def update_playlist(
+    playlist_id: str,
+    request: PlaylistUpdateRequest,
+    admin_session: AdminSession = Depends(get_current_admin_session),
+):
+    if request.title is None and request.description is None and request.cover_image is None:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    if request.title is not None and not request.title.strip():
+        raise HTTPException(status_code=400, detail="Title is required")
+
+    try:
+        playlist_uuid = uuid.UUID(playlist_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+
+    with get_session() as db:
+        playlist = db.get(Playlist, playlist_uuid)
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+
+        if request.title is not None:
+            playlist.title = request.title.strip()
+        if request.description is not None:
+            playlist.description = request.description
+        if request.cover_image is not None:
+            playlist.cover_image = request.cover_image
+
+        db.add(playlist)
+        db.commit()
+        db.refresh(playlist)
+        return {
+            "id": str(playlist.id),
+            "title": playlist.title,
+            "description": playlist.description,
+            "cover_image": playlist.cover_image,
+            "playlist_type": playlist.playlist_type.value,
+            "owner_type": playlist.owner_type.value,
+            "created_at": playlist.created_at.isoformat(),
+            "updated_at": playlist.updated_at.isoformat(),
+        }
+
+
+@router.delete("/api/playlists/{playlist_id}")
+async def delete_playlist(
+    playlist_id: str,
+    admin_session: AdminSession = Depends(get_current_admin_session),
+):
+    try:
+        playlist_uuid = uuid.UUID(playlist_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+
+    with get_session() as db:
+        playlist = db.get(Playlist, playlist_uuid)
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+        db.delete(playlist)
+        db.commit()
+        return {"message": "Playlist deleted"}
+
+
+@router.get("/api/playlists/{playlist_id}/items")
+async def get_playlist_items(
+    playlist_id: str,
+    admin_session: AdminSession = Depends(get_current_admin_session),
+):
+    try:
+        playlist_uuid = uuid.UUID(playlist_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+
+    with get_session() as db:
+        playlist = db.get(Playlist, playlist_uuid)
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+        items = (
+            db.query(PlaylistAsset)
+            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .order_by(cast(Any, PlaylistAsset.position))
+            .all()
+        )
+        return {
+            "items": [
+                {
+                    "asset_id": str(item.asset_id),
+                    "position": item.position,
+                    "cached_title": item.cached_title,
+                    "cached_thumbnail": item.cached_thumbnail,
+                    "added_at": item.added_at.isoformat(),
+                }
+                for item in items
+            ],
+            "total": len(items),
+        }
+
+
+@router.post("/api/playlists/{playlist_id}/items")
+async def add_playlist_item(
+    playlist_id: str,
+    request: PlaylistItemCreateRequest,
+    admin_session: AdminSession = Depends(get_current_admin_session),
+):
+    if request.position is not None and request.position < 0:
+        raise HTTPException(status_code=400, detail="Position must be >= 0")
+
+    try:
+        playlist_uuid = uuid.UUID(playlist_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+
+    try:
+        asset_uuid = uuid.UUID(request.asset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+
+    with get_session() as db:
+        playlist = db.get(Playlist, playlist_uuid)
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+
+        asset = get_asset_by_id(db, asset_uuid)
+        if not asset:
+            raise HTTPException(status_code=400, detail="Asset not found")
+        track = get_subtitle_track_by_asset(
+            db, asset.id, SubtitleTrackType.PROCESSED, is_default=True
+        )
+        if not track:
+            raise HTTPException(status_code=400, detail="Asset has no processed subtitles")
+
+        existing = (
+            db.query(PlaylistAsset)
+            .filter(
+                _as_clause(PlaylistAsset.playlist_id == playlist.id),
+                _as_clause(PlaylistAsset.asset_id == asset_uuid),
+            )
+            .first()
+        )
+        if existing:
+            raise HTTPException(status_code=409, detail="Asset already in playlist")
+
+        items = (
+            db.query(PlaylistAsset)
+            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .order_by(cast(Any, PlaylistAsset.position))
+            .all()
+        )
+        insert_position = len(items) if request.position is None else request.position
+        if insert_position > len(items):
+            insert_position = len(items)
+
+        new_item = PlaylistAsset(
+            playlist_id=playlist.id,
+            asset_id=asset.id,
+            position=len(items) + 1000,
+            cached_title=_get_asset_title(db, asset),
+            cached_thumbnail=_get_asset_thumbnail(asset),
+        )
+        items.insert(insert_position, new_item)
+        db.add(new_item)
+        _normalize_playlist_positions(db, items)
+        db.commit()
+        db.refresh(new_item)
+        return {
+            "asset_id": str(new_item.asset_id),
+            "position": new_item.position,
+            "cached_title": new_item.cached_title,
+            "cached_thumbnail": new_item.cached_thumbnail,
+            "added_at": new_item.added_at.isoformat(),
+        }
+
+
+@router.put("/api/playlists/{playlist_id}/items/{asset_id}")
+async def set_playlist_item_position(
+    playlist_id: str,
+    asset_id: str,
+    request: PlaylistItemUpdateRequest,
+    admin_session: AdminSession = Depends(get_current_admin_session),
+):
+    if request.position < 0:
+        raise HTTPException(status_code=400, detail="Position must be >= 0")
+
+    try:
+        playlist_uuid = uuid.UUID(playlist_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+
+    try:
+        asset_uuid = uuid.UUID(asset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+
+    with get_session() as db:
+        playlist = db.get(Playlist, playlist_uuid)
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+
+        items = (
+            db.query(PlaylistAsset)
+            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .order_by(cast(Any, PlaylistAsset.position))
+            .all()
+        )
+        target = next((item for item in items if item.asset_id == asset_uuid), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="Asset not in playlist")
+
+        items.remove(target)
+        new_position = request.position
+        if new_position >= len(items):
+            new_position = len(items)
+        items.insert(new_position, target)
+        _normalize_playlist_positions(db, items)
+        db.commit()
+        db.refresh(target)
+        return {
+            "asset_id": str(target.asset_id),
+            "position": target.position,
+            "cached_title": target.cached_title,
+            "cached_thumbnail": target.cached_thumbnail,
+            "added_at": target.added_at.isoformat(),
+        }
+
+
+@router.delete("/api/playlists/{playlist_id}/items/{asset_id}")
+async def delete_playlist_item(
+    playlist_id: str,
+    asset_id: str,
+    admin_session: AdminSession = Depends(get_current_admin_session),
+):
+    try:
+        playlist_uuid = uuid.UUID(playlist_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+
+    try:
+        asset_uuid = uuid.UUID(asset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+
+    with get_session() as db:
+        playlist = db.get(Playlist, playlist_uuid)
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+
+        items = (
+            db.query(PlaylistAsset)
+            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .order_by(cast(Any, PlaylistAsset.position))
+            .all()
+        )
+        target = next((item for item in items if item.asset_id == asset_uuid), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="Asset not in playlist")
+
+        items.remove(target)
+        db.delete(target)
+        if items:
+            _normalize_playlist_positions(db, items)
+        db.commit()
+        return {"message": "Playlist item deleted"}
+
+
+@router.get("/api/playlists/{playlist_id}/context")
+async def get_playlist_context(
+    playlist_id: str,
+    asset_id: str,
+    admin_session: AdminSession = Depends(get_current_admin_session),
+):
+    try:
+        playlist_uuid = uuid.UUID(playlist_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+
+    try:
+        asset_uuid = uuid.UUID(asset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+
+    with get_session() as db:
+        playlist = db.get(Playlist, playlist_uuid)
+        if not playlist:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+
+        items = (
+            db.query(PlaylistAsset)
+            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .order_by(cast(Any, PlaylistAsset.position))
+            .all()
+        )
+        current_item = next((item for item in items if item.asset_id == asset_uuid), None)
+        if not current_item:
+            raise HTTPException(status_code=404, detail="Asset not in playlist")
+
+        return {
+            "playlist_id": str(playlist.id),
+            "playlist_title": playlist.title,
+            "current_position": current_item.position,
+            "items": [
+                {
+                    "asset_id": str(item.asset_id),
+                    "position": item.position,
+                    "cached_title": item.cached_title,
+                }
+                for item in items
+            ],
+        }

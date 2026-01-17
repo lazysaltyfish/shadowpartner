@@ -222,141 +222,174 @@
                     <h2 class="text-xl font-semibold text-gray-800 truncate">{{ playPageData.title }}</h2>
                 </div>
 
-                <!-- Video Player Area -->
-                <div class="shrink-0 bg-black rounded-lg overflow-hidden shadow-lg">
-                    <div id="youtube-player" class="w-full"></div>
-                </div>
+                <div class="flex-1 flex flex-col lg:flex-row gap-4 overflow-hidden">
+                    <div class="flex-1 flex flex-col gap-4 overflow-hidden">
+                        <!-- Video Player Area -->
+                        <div class="shrink-0 bg-black rounded-lg overflow-hidden shadow-lg">
+                            <div id="youtube-player" class="w-full"></div>
+                        </div>
 
-                <!-- Mode Toggle -->
-                <div class="flex justify-center">
-                    <div class="flex bg-gray-800 rounded-lg p-1">
-                        <button
-                            @click="dictation.active = false"
-                            :class="!dictation.active ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'"
-                            class="px-4 py-1.5 rounded-md text-sm font-medium transition-all"
-                        >
-                            Shadowing
-                        </button>
-                        <button
-                            @click="dictation.active = true"
-                            :class="dictation.active ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'"
-                            class="px-4 py-1.5 rounded-md text-sm font-medium transition-all"
-                        >
-                            Dictation
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Subtitles Area - Shadowing Mode -->
-                <div v-if="!dictation.active" class="flex-1 bg-gray-900 rounded-lg shadow-md p-6 overflow-y-auto relative scroll-smooth border border-gray-800">
-                    <div class="max-w-3xl mx-auto flex flex-col justify-center min-h-full transition-all duration-500">
-                        <div
-                            v-for="(segment, index) in playPageVisibleSegments"
-                            :key="segment.originalIndex"
-                            class="mb-6 p-4 rounded-xl transition-all duration-500 transform"
-                            :class="currentSegmentIndex === segment.originalIndex ? 'bg-gray-800 ring-2 ring-blue-500/50 shadow-lg scale-100 opacity-100' : 'bg-transparent opacity-40 scale-95'"
-                        >
-                            <!-- Japanese Line -->
-                            <div class="text-xl mb-2 leading-loose font-medium" :class="currentSegmentIndex === segment.originalIndex ? 'text-white' : 'text-gray-400'">
-                                <span
-                                    v-for="(word, wIndex) in segment.words"
-                                    :key="wIndex"
-                                    class="group inline-block px-1 rounded transition-all duration-150 cursor-pointer select-none"
-                                    :class="{
-                                        'bg-blue-600 text-white shadow-sm font-bold': isWordActive(word, segment),
-                                        'hover:bg-gray-700': !isWordActive(word, segment)
-                                    }"
-                                    @click="seekTo(playPageHasWordTimestamps ? word.start : segment.start)"
+                        <!-- Mode Toggle -->
+                        <div class="flex justify-center">
+                            <div class="flex bg-gray-800 rounded-lg p-1">
+                                <button
+                                    @click="dictation.active = false"
+                                    :class="!dictation.active ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'"
+                                    class="px-4 py-1.5 rounded-md text-sm font-medium transition-all"
                                 >
-                                    <ruby>
-                                        {{ word.text }}
-                                        <rt class="text-xs font-normal select-none transition-opacity" :class="isWordActive(word, segment) ? 'text-blue-200' : 'text-gray-500'">{{ word.reading }}</rt>
-                                    </ruby>
-                                </span>
-                            </div>
-                            <!-- Translation Line -->
-                            <div class="text-base border-t border-gray-700 pt-2 mt-1 font-light" :class="currentSegmentIndex === segment.originalIndex ? 'text-gray-300' : 'text-gray-500'">
-                                {{ segment.translation }}
-                            </div>
-                        </div>
-                        <div v-if="playPageVisibleSegments.length === 0" class="text-center text-gray-500 py-10">
-                            等待播放...
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Dictation Mode for Play Page -->
-                <div v-if="dictation.active" class="flex-1 flex flex-col bg-gray-900 rounded-lg shadow-inner border border-gray-800 overflow-hidden">
-                    <div class="h-1 w-full bg-gray-800">
-                        <div class="h-full bg-blue-500 transition-all duration-300" :style="{ width: (dictation.segmentIndex / (playPageData?.segments?.length || 1) * 100) + '%' }"></div>
-                    </div>
-
-                    <div class="flex-1 flex flex-col items-center justify-center p-6 space-y-4">
-                        <div class="text-gray-500 text-sm">
-                            Sentence {{ dictation.segmentIndex + 1 }} / {{ playPageData?.segments?.length || 0 }}
-                        </div>
-
-                        <button
-                            @click="toggleDictationPlayback"
-                            class="w-16 h-16 rounded-full text-white flex items-center justify-center shadow-lg transform transition-all active:scale-95 hover:scale-105"
-                            :class="dictation.isPlaying ? 'bg-red-500 hover:bg-red-400' : 'bg-blue-600 hover:bg-blue-500'"
-                            :title="dictation.isPlaying ? 'Stop' : 'Play'">
-                            <svg v-if="!dictation.isPlaying" class="w-8 h-8 ml-1" fill="currentColor" viewBox="0 0 24 24">
-                                <path d="M8 5v14l11-7z"/>
-                            </svg>
-                            <svg v-else class="w-7 h-7" fill="currentColor" viewBox="0 0 24 24">
-                                <path d="M6 6h12v12H6z"/>
-                            </svg>
-                        </button>
-                        <div class="text-gray-400 text-xs">{{ dictation.isPlaying ? 'Looping...' : 'Click to listen' }}</div>
-
-                        <textarea
-                            v-if="dictation.mode !== 'review'"
-                            v-model="dictation.userInput"
-                            @compositionstart="dictation.isComposing = true"
-                            @compositionend="dictation.isComposing = false"
-                            @keydown.enter.prevent="handleDictationEnter"
-                            class="w-full max-w-2xl bg-gray-800 border-2 border-gray-700 focus:border-blue-500 rounded-xl p-4 text-xl text-white placeholder-gray-600 focus:outline-none focus:ring-4 focus:ring-blue-500/20 transition-all resize-none text-center leading-relaxed"
-                            rows="3"
-                            placeholder="Type what you hear..."
-                            inputmode="text"
-                        ></textarea>
-
-                        <div v-if="dictation.mode === 'review'" class="w-full max-w-2xl text-center text-xl leading-relaxed font-medium bg-gray-800/50 p-6 rounded-xl border border-gray-700">
-                            <span v-for="(char, idx) in dictation.diffResult" :key="idx"
-                                :class="{
-                                    'text-green-400': char.status === 'correct',
-                                    'text-red-400': char.status === 'wrong',
-                                    'text-yellow-400 opacity-60': char.status === 'missing'
-                                }">{{ char.text }}</span>
-                            <div v-if="dictation.currentScore !== null" class="mt-4 text-sm text-gray-400">
-                                Accuracy: <span :class="dictation.currentScore >= 80 ? 'text-green-400' : 'text-yellow-400'">{{ dictation.currentScore }}%</span>
+                                    Shadowing
+                                </button>
+                                <button
+                                    @click="dictation.active = true"
+                                    :class="dictation.active ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'"
+                                    class="px-4 py-1.5 rounded-md text-sm font-medium transition-all"
+                                >
+                                    Dictation
+                                </button>
                             </div>
                         </div>
+
+                        <!-- Subtitles Area - Shadowing Mode -->
+                        <div v-if="!dictation.active" class="flex-1 bg-gray-900 rounded-lg shadow-md p-6 overflow-y-auto relative scroll-smooth border border-gray-800">
+                            <div class="max-w-3xl mx-auto flex flex-col justify-center min-h-full transition-all duration-500">
+                                <div
+                                    v-for="(segment, index) in playPageVisibleSegments"
+                                    :key="segment.originalIndex"
+                                    class="mb-6 p-4 rounded-xl transition-all duration-500 transform"
+                                    :class="currentSegmentIndex === segment.originalIndex ? 'bg-gray-800 ring-2 ring-blue-500/50 shadow-lg scale-100 opacity-100' : 'bg-transparent opacity-40 scale-95'"
+                                >
+                                    <!-- Japanese Line -->
+                                    <div class="text-xl mb-2 leading-loose font-medium" :class="currentSegmentIndex === segment.originalIndex ? 'text-white' : 'text-gray-400'">
+                                        <span
+                                            v-for="(word, wIndex) in segment.words"
+                                            :key="wIndex"
+                                            class="group inline-block px-1 rounded transition-all duration-150 cursor-pointer select-none"
+                                            :class="{
+                                                'bg-blue-600 text-white shadow-sm font-bold': isWordActive(word, segment),
+                                                'hover:bg-gray-700': !isWordActive(word, segment)
+                                            }"
+                                            @click="seekTo(playPageHasWordTimestamps ? word.start : segment.start)"
+                                        >
+                                            <ruby>
+                                                {{ word.text }}
+                                                <rt class="text-xs font-normal select-none transition-opacity" :class="isWordActive(word, segment) ? 'text-blue-200' : 'text-gray-500'">{{ word.reading }}</rt>
+                                            </ruby>
+                                        </span>
+                                    </div>
+                                    <!-- Translation Line -->
+                                    <div class="text-base border-t border-gray-700 pt-2 mt-1 font-light" :class="currentSegmentIndex === segment.originalIndex ? 'text-gray-300' : 'text-gray-500'">
+                                        {{ segment.translation }}
+                                    </div>
+                                </div>
+                                <div v-if="playPageVisibleSegments.length === 0" class="text-center text-gray-500 py-10">
+                                    等待播放...
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Dictation Mode for Play Page -->
+                        <div v-if="dictation.active" class="flex-1 flex flex-col bg-gray-900 rounded-lg shadow-inner border border-gray-800 overflow-hidden">
+                            <div class="h-1 w-full bg-gray-800">
+                                <div class="h-full bg-blue-500 transition-all duration-300" :style="{ width: (dictation.segmentIndex / (playPageData?.segments?.length || 1) * 100) + '%' }"></div>
+                            </div>
+
+                            <div class="flex-1 flex flex-col items-center justify-center p-6 space-y-4">
+                                <div class="text-gray-500 text-sm">
+                                    Sentence {{ dictation.segmentIndex + 1 }} / {{ playPageData?.segments?.length || 0 }}
+                                </div>
+
+                                <button
+                                    @click="toggleDictationPlayback"
+                                    class="w-16 h-16 rounded-full text-white flex items-center justify-center shadow-lg transform transition-all active:scale-95 hover:scale-105"
+                                    :class="dictation.isPlaying ? 'bg-red-500 hover:bg-red-400' : 'bg-blue-600 hover:bg-blue-500'"
+                                    :title="dictation.isPlaying ? 'Stop' : 'Play'">
+                                    <svg v-if="!dictation.isPlaying" class="w-8 h-8 ml-1" fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M8 5v14l11-7z"/>
+                                    </svg>
+                                    <svg v-else class="w-7 h-7" fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M6 6h12v12H6z"/>
+                                    </svg>
+                                </button>
+                                <div class="text-gray-400 text-xs">{{ dictation.isPlaying ? 'Looping...' : 'Click to listen' }}</div>
+
+                                <textarea
+                                    v-if="dictation.mode !== 'review'"
+                                    v-model="dictation.userInput"
+                                    @compositionstart="dictation.isComposing = true"
+                                    @compositionend="dictation.isComposing = false"
+                                    @keydown.enter.prevent="handleDictationEnter"
+                                    class="w-full max-w-2xl bg-gray-800 border-2 border-gray-700 focus:border-blue-500 rounded-xl p-4 text-xl text-white placeholder-gray-600 focus:outline-none focus:ring-4 focus:ring-blue-500/20 transition-all resize-none text-center leading-relaxed"
+                                    rows="3"
+                                    placeholder="Type what you hear..."
+                                    inputmode="text"
+                                ></textarea>
+
+                                <div v-if="dictation.mode === 'review'" class="w-full max-w-2xl text-center text-xl leading-relaxed font-medium bg-gray-800/50 p-6 rounded-xl border border-gray-700">
+                                    <span v-for="(char, idx) in dictation.diffResult" :key="idx"
+                                        :class="{
+                                            'text-green-400': char.status === 'correct',
+                                            'text-red-400': char.status === 'wrong',
+                                            'text-yellow-400 opacity-60': char.status === 'missing'
+                                        }">{{ char.text }}</span>
+                                    <div v-if="dictation.currentScore !== null" class="mt-4 text-sm text-gray-400">
+                                        Accuracy: <span :class="dictation.currentScore >= 80 ? 'text-green-400' : 'text-yellow-400'">{{ dictation.currentScore }}%</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="p-4 bg-gray-800 border-t border-gray-700 flex items-center justify-center gap-4">
+                                <button @click="gotoPrevSegment" class="p-3 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition-colors" title="Previous">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                                </button>
+                                <button @click="playCurrentSegment" class="p-3 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition-colors" title="Replay">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                                </button>
+                                <button
+                                    @click="handleDictationMainAction"
+                                    class="px-6 py-2.5 rounded-full font-bold text-base shadow-lg transform transition-all active:scale-95 flex items-center gap-2"
+                                    :class="dictation.mode === 'review' ? 'bg-green-600 hover:bg-green-500 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'">
+                                    <span v-if="dictation.mode !== 'review'">Check</span>
+                                    <span v-else>Next</span>
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path></svg>
+                                </button>
+                                <button v-if="dictation.mode !== 'review'" @click="skipCurrentSegment" class="p-3 text-gray-400 hover:text-yellow-400 hover:bg-gray-700 rounded-full transition-colors" title="Skip">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg>
+                                </button>
+                                <button @click="gotoNextSegment" class="p-3 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition-colors" title="Next">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                                </button>
+                            </div>
+                        </div>
                     </div>
 
-                    <div class="p-4 bg-gray-800 border-t border-gray-700 flex items-center justify-center gap-4">
-                        <button @click="gotoPrevSegment" class="p-3 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition-colors" title="Previous">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
-                        </button>
-                        <button @click="playCurrentSegment" class="p-3 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition-colors" title="Replay">
-                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                        </button>
-                        <button
-                            @click="handleDictationMainAction"
-                            class="px-6 py-2.5 rounded-full font-bold text-base shadow-lg transform transition-all active:scale-95 flex items-center gap-2"
-                            :class="dictation.mode === 'review' ? 'bg-green-600 hover:bg-green-500 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'">
-                            <span v-if="dictation.mode !== 'review'">Check</span>
-                            <span v-else>Next</span>
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path></svg>
-                        </button>
-                        <button v-if="dictation.mode !== 'review'" @click="skipCurrentSegment" class="p-3 text-gray-400 hover:text-yellow-400 hover:bg-gray-700 rounded-full transition-colors" title="Skip">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg>
-                        </button>
-                        <button @click="gotoNextSegment" class="p-3 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition-colors" title="Next">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
-                        </button>
-                    </div>
+                    <aside v-if="playlistContext || playlistContextLoading" class="w-full lg:w-72 xl:w-80 bg-white rounded-lg shadow-md overflow-hidden flex flex-col">
+                        <div class="p-4 border-b border-gray-200">
+                            <p class="text-xs uppercase text-gray-400">Playlist</p>
+                            <div v-if="playlistContext" class="flex items-baseline justify-between gap-2">
+                                <h3 class="text-lg font-semibold text-gray-800 truncate">{{ playlistContext.playlist_title }}</h3>
+                                <span class="text-xs text-gray-500">{{ playlistContext.items.length }} videos</span>
+                            </div>
+                            <div v-else class="text-sm text-gray-500">Loading playlist...</div>
+                        </div>
+                        <div class="flex-1 overflow-y-auto divide-y divide-gray-100">
+                            <button
+                                v-for="item in (playlistContext && playlistContext.items ? playlistContext.items : [])"
+                                :key="item.asset_id"
+                                @click="goToPlaylistAsset(item.asset_id)"
+                                class="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors flex items-center gap-3"
+                                :class="isPlaylistItemActive(item) ? 'bg-blue-50' : ''"
+                            >
+                                <div class="text-xs text-gray-400 w-6 text-right">{{ item.position + 1 }}</div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-medium text-gray-800 truncate">{{ item.cached_title || 'Untitled' }}</p>
+                                </div>
+                                <span v-if="isPlaylistItemActive(item)" class="text-xs text-blue-600 font-semibold">播放中</span>
+                            </button>
+                            <div v-if="playlistContext && playlistContext.items.length === 0" class="p-4 text-sm text-gray-500">
+                                Empty playlist
+                            </div>
+                        </div>
+                    </aside>
                 </div>
             </div>
         </div>
@@ -607,6 +640,17 @@
                             >
                                 Subtitle Tracks
                             </button>
+                            <button
+                                @click="adminActiveTab = 'playlists'"
+                                :class="[
+                                    'py-2 px-4 border-b-2 font-medium text-sm transition-colors',
+                                    adminActiveTab === 'playlists'
+                                        ? 'border-blue-500 text-blue-600'
+                                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                ]"
+                            >
+                                Playlists
+                            </button>
                         </nav>
                     </div>
                 </div>
@@ -835,6 +879,133 @@
                             </tbody>
                         </table>
                     </div>
+
+                    <!-- Playlists Tab -->
+                    <div v-else-if="adminActiveTab === 'playlists'" class="p-6 overflow-hidden flex flex-col h-full">
+                        <div v-if="adminPlaylistView === 'list'" class="flex-1 flex flex-col gap-4">
+                            <div class="flex items-center justify-between">
+                                <h2 class="text-lg font-semibold text-gray-800">Playlists</h2>
+                                <button
+                                    @click="adminOpenPlaylistModal()"
+                                    class="bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                                >
+                                    + New Playlist
+                                </button>
+                            </div>
+
+                            <div v-if="adminPlaylists.length === 0" class="text-gray-500 text-center py-12">
+                                No playlists found
+                            </div>
+
+                            <div v-else class="space-y-4 overflow-y-auto pr-2">
+                                <div v-for="playlist in adminPlaylists" :key="playlist.id" class="border border-gray-200 rounded-lg p-4 flex flex-col gap-3">
+                                    <div class="flex items-start justify-between gap-4">
+                                        <div class="min-w-0">
+                                            <h3 class="text-lg font-semibold truncate">
+                                                <button
+                                                    v-if="playlist.item_count > 0"
+                                                    @click="adminOpenPlaylistPlay(playlist)"
+                                                    class="text-blue-600 hover:text-blue-800 hover:underline text-left truncate w-full"
+                                                >
+                                                    {{ playlist.title }}
+                                                </button>
+                                                <span v-else class="text-gray-800">{{ playlist.title }}</span>
+                                            </h3>
+                                            <p v-if="playlist.description" class="text-sm text-gray-500 mt-1">{{ playlist.description }}</p>
+                                            <p v-else class="text-sm text-gray-400 mt-1">No description</p>
+                                        </div>
+                                        <div class="flex gap-2">
+                                            <button
+                                                @click="adminOpenPlaylistDetail(playlist)"
+                                                class="text-blue-600 hover:text-blue-900 text-sm"
+                                            >
+                                                Manage
+                                            </button>
+                                            <button
+                                                @click="adminOpenPlaylistModal(playlist)"
+                                                class="text-gray-600 hover:text-gray-900 text-sm"
+                                            >
+                                                Edit
+                                            </button>
+                                            <button
+                                                @click="adminConfirmDelete('playlist', playlist.id, playlist.title)"
+                                                class="text-red-600 hover:text-red-900 text-sm"
+                                            >
+                                                Delete
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="text-xs text-gray-400 flex items-center gap-4">
+                                        <span>{{ playlist.item_count }} videos</span>
+                                        <span>Created {{ adminFormatDate(playlist.created_at) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div v-else-if="adminPlaylistView === 'detail' && adminActivePlaylist" class="flex-1 flex flex-col gap-4">
+                            <div class="flex items-center justify-between gap-4">
+                                <div class="flex items-center gap-4">
+                                    <button
+                                        @click="adminBackToPlaylists"
+                                        class="text-gray-600 hover:text-gray-800"
+                                    >
+                                        ← Back
+                                    </button>
+                                    <div>
+                                        <h2 class="text-lg font-semibold text-gray-800">Playlist: {{ adminActivePlaylist.title }}</h2>
+                                        <p class="text-sm text-gray-500">{{ adminPlaylistItems.length }} videos</p>
+                                    </div>
+                                </div>
+                                <button
+                                    @click="adminOpenPlaylistSearch"
+                                    class="bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                                >
+                                    + Add Video
+                                </button>
+                            </div>
+
+                            <div class="bg-gray-50 rounded-lg p-4 flex-1 overflow-y-auto">
+                                <div v-if="adminPlaylistItems.length === 0" class="text-gray-500 text-center py-12">
+                                    No videos in this playlist
+                                </div>
+                                <div v-else class="space-y-3">
+                                    <div
+                                        v-for="item in adminPlaylistItems"
+                                        :key="item.asset_id"
+                                        class="flex items-center justify-between gap-4 bg-white rounded-lg border border-gray-200 px-4 py-3"
+                                    >
+                                        <div class="flex items-center gap-3 min-w-0">
+                                            <span class="text-xs text-gray-400 w-6 text-right">{{ item.position + 1 }}</span>
+                                            <span class="text-sm font-medium text-gray-800 truncate">{{ item.cached_title }}</span>
+                                        </div>
+                                        <div class="flex items-center gap-2">
+                                            <button
+                                                @click="adminMovePlaylistItem(item, -1)"
+                                                :disabled="item.position === 0"
+                                                class="text-gray-500 hover:text-gray-800 disabled:opacity-40"
+                                            >
+                                                ↑
+                                            </button>
+                                            <button
+                                                @click="adminMovePlaylistItem(item, 1)"
+                                                :disabled="item.position === adminPlaylistItems.length - 1"
+                                                class="text-gray-500 hover:text-gray-800 disabled:opacity-40"
+                                            >
+                                                ↓
+                                            </button>
+                                            <button
+                                                @click="adminRemovePlaylistItem(item)"
+                                                class="text-red-600 hover:text-red-900 text-sm"
+                                            >
+                                                Remove
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -932,6 +1103,137 @@
                             class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Playlist Create/Edit Modal -->
+            <div v-if="adminPlaylistModalOpen" class="fixed inset-0 z-[9999] flex items-center justify-center" style="background-color: rgba(0,0,0,0.75);">
+                <div class="bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6 mx-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 sm:mx-0 sm:h-10 sm:w-10">
+                            <svg class="h-6 w-6 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                            </svg>
+                        </div>
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                            <h3 class="text-lg leading-6 font-medium text-gray-900">
+                                {{ adminPlaylistForm.id ? 'Edit Playlist' : 'Create Playlist' }}
+                            </h3>
+                            <div class="mt-4 space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                                    <input
+                                        v-model="adminPlaylistForm.title"
+                                        type="text"
+                                        placeholder="Enter title"
+                                        class="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                                    <textarea
+                                        v-model="adminPlaylistForm.description"
+                                        placeholder="Enter description"
+                                        rows="3"
+                                        class="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    ></textarea>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Cover Image URL (optional)</label>
+                                    <input
+                                        v-model="adminPlaylistForm.cover_image"
+                                        type="text"
+                                        placeholder="https://..."
+                                        class="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse gap-2">
+                        <button
+                            @click="adminSavePlaylist"
+                            :disabled="adminPlaylistSaving"
+                            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:w-auto sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {{ adminPlaylistSaving ? 'Saving...' : 'Save' }}
+                        </button>
+                        <button
+                            @click="adminPlaylistModalOpen = false"
+                            :disabled="adminPlaylistSaving"
+                            class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Playlist Search Modal -->
+            <div v-if="adminPlaylistSearchOpen" class="fixed inset-0 z-[9999] flex items-center justify-center" style="background-color: rgba(0,0,0,0.75);">
+                <div class="bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full sm:p-6 mx-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-green-100 sm:mx-0 sm:h-10 sm:w-10">
+                            <svg class="h-6 w-6 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16h6m2 0a2 2 0 002-2V8a2 2 0 00-2-2H7a2 2 0 00-2 2v6a2 2 0 002 2h10z" />
+                            </svg>
+                        </div>
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
+                            <h3 class="text-lg leading-6 font-medium text-gray-900">
+                                Add Videos to Playlist
+                            </h3>
+                            <div class="mt-4 flex gap-2">
+                                <input
+                                    v-model="adminPlaylistSearchQuery"
+                                    @keydown.enter.prevent="adminSearchPlaylistAssets"
+                                    type="text"
+                                    placeholder="Search by title or ID"
+                                    class="flex-1 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                                <button
+                                    @click="adminSearchPlaylistAssets"
+                                    class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                                >
+                                    Search
+                                </button>
+                            </div>
+
+                            <div class="mt-4 max-h-72 overflow-y-auto border border-gray-200 rounded-lg">
+                                <div v-if="adminPlaylistSearchLoading" class="p-4 text-center text-gray-500">
+                                    Searching...
+                                </div>
+                                <div v-else-if="adminPlaylistSearchResults.length === 0" class="p-4 text-center text-gray-500">
+                                    No results
+                                </div>
+                                <div v-else class="divide-y divide-gray-200">
+                                    <div
+                                        v-for="asset in adminPlaylistSearchResults"
+                                        :key="asset.id"
+                                        class="flex items-center justify-between px-4 py-3"
+                                    >
+                                        <div class="min-w-0">
+                                            <p class="text-sm font-medium text-gray-800 truncate">{{ asset.title || 'Untitled' }}</p>
+                                            <p class="text-xs text-gray-400 truncate">{{ asset.id }}</p>
+                                        </div>
+                                        <button
+                                            @click="adminAddPlaylistAsset(asset)"
+                                            class="text-blue-600 hover:text-blue-900 text-sm"
+                                        >
+                                            + Add
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse gap-2">
+                        <button
+                            @click="adminPlaylistSearchOpen = false"
+                            class="w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:w-auto sm:text-sm"
+                        >
+                            Close
                         </button>
                     </div>
                 </div>

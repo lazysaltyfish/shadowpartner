@@ -4,7 +4,7 @@ import asyncio
 import os
 import time
 import uuid
-from typing import Optional
+from typing import Any, Optional, cast
 
 from fastapi import (
     APIRouter,
@@ -17,6 +17,8 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
+from sqlalchemy import desc, func
+from sqlalchemy.sql import ColumnElement
 
 import services_registry
 import session_manager
@@ -28,7 +30,7 @@ from db.crud import (
     get_or_create_guest_user,
     get_subtitle_track_by_asset,
 )
-from db.models import AssetType, SubtitleTrackType
+from db.models import Asset, AssetType, SubtitleTrack, SubtitleTrackType
 from models import (
     AsyncProcessResponse,
     AuthSession,
@@ -66,6 +68,10 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 limiter = get_limiter()
+
+
+def _as_clause(value: Any) -> ColumnElement[bool]:
+    return cast(ColumnElement[bool], value)
 
 
 async def handle_existing_file(
@@ -589,6 +595,64 @@ async def upload_video(
 
 
 # ==================== Public Asset API ====================
+
+
+@router.get("/api/assets/search")
+async def search_assets(
+    q: str = "",
+    limit: int = 50,
+    offset: int = 0,
+    admin_session: AdminSession = Depends(session_manager.get_current_admin_session),
+):
+    search_term = q.strip().lower()
+
+    with get_session() as db:
+        query = (
+            db.query(Asset, SubtitleTrack)
+            .join(SubtitleTrack)
+            .filter(
+                _as_clause(SubtitleTrack.track_type == SubtitleTrackType.PROCESSED),
+                _as_clause(cast(Any, SubtitleTrack.is_default).is_(True)),
+            )
+        )
+        if search_term:
+            search_like = f"%{search_term}%"
+            meta_title_expr = func.json_extract(Asset.meta, "$.title")
+            track_title_expr = func.json_extract(SubtitleTrack.content, "$.title")
+            search_title_expr = func.coalesce(
+                func.nullif(meta_title_expr, ""),
+                track_title_expr,
+                "",
+            )
+            query = query.filter(
+                _as_clause(func.lower(Asset.identifier).like(search_like))
+                | _as_clause(func.lower(search_title_expr).like(search_like))
+            )
+        total = query.with_entities(cast(Any, Asset.id)).distinct().count()
+        assets = (
+            query.order_by(desc(cast(Any, Asset.created_at)))
+            .distinct()
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
+        results = []
+        for asset, track in assets:
+            meta_title = (asset.meta or {}).get("title")
+            track_title = track.content.get("title", "") if track else ""
+            title = meta_title if meta_title else track_title
+            thumbnail = None
+            if asset.type == AssetType.YOUTUBE:
+                thumbnail = f"https://img.youtube.com/vi/{asset.identifier}/mqdefault.jpg"
+            results.append(
+                {
+                    "id": str(asset.id),
+                    "title": title,
+                    "thumbnail": thumbnail,
+                    "type": asset.type.value,
+                }
+            )
+        return {"items": results, "total": total}
 
 
 @router.get("/api/assets/{asset_id}")

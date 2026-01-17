@@ -68,11 +68,12 @@
 #### Frontend Tests (E2E with Playwright)
 - **Pre-commit Requirement**: All frontend tests MUST pass before committing frontend code changes.
 - **Test Command**: Run `cd frontend && npm test` to execute all Playwright tests.
-- **Test Coverage**: Tests cover home page, admin page, play page, router, player initialization (including reload), error handling, and reload modal flash gating.
+- **Test Coverage**: Tests cover home page, admin page, play page, router, player initialization (including reload), error handling, reload modal flash gating, and playlist admin/playlist sidebar flows.
 - **Test Files**:
   - `frontend/tests/admin.spec.js` - Admin login and data loading tests
   - `frontend/tests/home.spec.js` - Home page and router tests
   - `frontend/tests/playpage.spec.js` - Play page, player, and subtitle tests
+  - `frontend/tests/playlist.spec.js` - Playlist admin + play page sidebar tests
 - **Running Options**:
   ```bash
   cd frontend
@@ -132,8 +133,8 @@ state.py                       # In-memory task store + upload sessions + auth s
 db/                            # [NEW] Database module
   ├── __init__.py
   ├── engine.py               # Database engine (SQLite setup)
-  ├── models.py               # SQLModel models (User, Asset, SubtitleTrack)
-  └── crud.py                # CRUD operations + admin CRUD functions
+  ├── models.py               # SQLModel models (User, Asset, SubtitleTrack, Playlist, PlaylistAsset)
+  └── crud.py                # CRUD operations + admin CRUD functions (users/assets/subtitles)
 services_registry.py           # Service initialization + whisper lock (initialized on startup)
 settings.py                    # Centralized environment settings loader (includes ADMIN_USERNAME/PASSWORD)
 validators.py                  # Upload file validation (size/type/mime)
@@ -147,6 +148,8 @@ scripts/                       # Maintenance scripts
   └── migrate_storage_prefix.py  # Storage migration script (legacy)
 tests/                         # Unit tests
   ├── test_calibration.py
+  ├── test_playlist_api.py    # Playlist API endpoint tests
+  ├── test_playlist_crud.py   # Playlist CRUD/DB tests
   ├── test_subtitle_linearizer.py
   ├── test_subtitle_matching.py
   ├── test_youtube_download.py
@@ -352,6 +355,40 @@ Input (File + User SRT Subtitle)
 - `DELETE /api/admin/subtitle-tracks/{track_id}` - Delete subtitle track
   - Requires: `X-Admin-Session-Id` header
 
+### Playlists (Admin-only)
+- `GET /api/playlists` - List playlists
+  - Requires: `X-Admin-Session-Id` header
+  - Returns: `{ items: [{ id, title, description, cover_image, playlist_type, owner_type, item_count, created_at, updated_at }], total }`
+  - `item_count` computed via aggregate query (no per-playlist count query)
+- `GET /api/playlists/{playlist_id}` - Get playlist with items
+  - Requires: `X-Admin-Session-Id` header
+  - Returns: `{ id, title, description, cover_image, playlist_type, owner_type, created_at, updated_at, items: [{ asset_id, position, cached_title, cached_thumbnail, added_at }] }`
+- `POST /api/playlists` - Create playlist
+  - Requires: `X-Admin-Session-Id` header
+  - Input: `{ "title": str, "description"?: str, "cover_image"?: str }`
+- `PUT /api/playlists/{playlist_id}` - Update playlist
+  - Requires: `X-Admin-Session-Id` header
+  - Input: `{ "title"?: str, "description"?: str, "cover_image"?: str }`
+- `DELETE /api/playlists/{playlist_id}` - Delete playlist
+  - Requires: `X-Admin-Session-Id` header
+- `GET /api/playlists/{playlist_id}/items` - List playlist items
+  - Requires: `X-Admin-Session-Id` header
+  - Returns: `{ items: [{ asset_id, position, cached_title, cached_thumbnail, added_at }], total }`
+- `POST /api/playlists/{playlist_id}/items` - Add asset to playlist
+  - Requires: `X-Admin-Session-Id` header
+  - Input: `{ "asset_id": UUID, "position"?: int }`
+- `PUT /api/playlists/{playlist_id}/items/{asset_id}` - Reorder playlist item
+  - Requires: `X-Admin-Session-Id` header
+  - Input: `{ "position": int }`
+- `DELETE /api/playlists/{playlist_id}/items/{asset_id}` - Remove item
+  - Requires: `X-Admin-Session-Id` header
+- `GET /api/playlists/{playlist_id}/context?asset_id={asset_id}` - Playlist context for play page
+  - Requires: `X-Admin-Session-Id` header
+  - Returns: `{ playlist_id, playlist_title, current_position, items: [{ asset_id, position, cached_title }] }`
+- `GET /api/assets/search?q={term}` - Search processed assets by title/identifier
+  - Requires: `X-Admin-Session-Id` header
+  - DB-level filtering on identifier and title (meta title fallback to processed track title) with pagination; no in-memory scan
+
 ## Maintenance Scripts
 
 ### Database Cleanup Script (`backend/scripts/cleanup_database.py`)
@@ -445,6 +482,34 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
   content: dict,  # JSON with segments, metrics, and optional language_detection metadata
   is_default: bool,
   created_at: DateTime,
+}
+```
+
+#### Playlist
+```python
+{
+  id: UUID,  # Primary key
+  title: str,
+  description: Optional[str],
+  cover_image: Optional[str],
+  playlist_type: Enum,  # "normal" | "favorites" | "history"
+  owner_type: Enum,  # "admin" | "user"
+  owner_id: Optional[UUID],
+  created_at: DateTime,
+  updated_at: DateTime,
+}
+```
+
+#### PlaylistAsset
+```python
+{
+  id: UUID,  # Primary key
+  playlist_id: UUID,  # FK -> Playlist.id
+  asset_id: UUID,  # FK -> Asset.id
+  position: int,
+  cached_title: str,
+  cached_thumbnail: Optional[str],
+  added_at: DateTime,
 }
 ```
 
@@ -572,6 +637,7 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 8. **Admin Panel**: Admin interface for managing users, assets, and subtitle tracks (requires ADMIN_USERNAME/PASSWORD)
 9. **Play Page Routing**: Dedicated play page via hash routing (`#/play/{asset_id}`), auto-redirect after processing
 10. **Frontend Routing**: Hash-based SPA routing with `/` (home video grid), `/upload` (upload page), and `/play/{asset_id}` routes
+11. **Playlists (Admin)**: Admin-managed playlists with ordered items, asset search, and play page sidebar context via `playlist_id`
 
 ## Important Implementation Details
 - **Persistent Architecture**: Database-based storage with SQLite (easily upgradable to PostgreSQL via DATABASE_URL env var)
@@ -603,6 +669,8 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 - **Video ID Hashing**: Uploaded files get hashed video IDs for uniqueness
 - **YouTube Player Sizing**: Frontend CSS enforces a 16:9 aspect ratio and iframe fill for `#youtube-player` to avoid collapsed embed height.
 - **Play Page State**: Play-page loads reset playback/segment state; word highlighting respects per-asset `has_word_timestamps`; router init waits for API base URL resolution to avoid failed direct loads; UI rendering is gated on API/route readiness to avoid transient modal flashes; health check only updates the status indicator.
+- **Playlists**: Play page supports a playlist sidebar when `playlist_id` is present in the hash query; admin panel exposes playlist CRUD + item management with ordered positions and asset search, and playlist titles link to the first item for quick playback. Playlist owns `PlaylistAsset` via `Playlist.items` with `delete-orphan` so removing from the playlist (or deleting the playlist) deletes items. `Asset.playlist_items` uses ORM cascade `all, delete` (no `delete-orphan`) so deleting an asset through the ORM also cleans playlist items; treat this collection as read-only and avoid mutating it directly (code comment in `backend/db/models.py`). DB-level `ondelete="CASCADE"` remains as a safety net for non-ORM deletes.
+- **Playlist Ordering**: Position normalization shifts items to a temporary offset based on current max position plus a padding constant (`POSITION_OFFSET_PADDING`) to avoid unique constraint collisions before rewriting positions to contiguous indices.
 - **Frontend Docs**: Key frontend workflow functions and modules include JSDoc for easier navigation and maintenance.
 - **Rate Limiting**: Implemented using slowapi (0.1.9) library with in-memory storage; different endpoints have different limits:
   - `/api/process`: 5/minute (expensive operation)
