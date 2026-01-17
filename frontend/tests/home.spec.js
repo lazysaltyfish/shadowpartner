@@ -57,15 +57,17 @@ test.describe('Router', () => {
     expect(hasContent).toBeTruthy();
   });
 
-  test('should return to home when clicking back button', async ({ page }) => {
+  test('should return to home using browser back button', async ({ page }) => {
+    // First go to home page to establish history
+    await page.goto('/');
+    await page.waitForTimeout(2000);
+
+    // Then navigate to play page
     await page.goto('/#/play/cfd555cd-bafc-4415-93e6-c794dacddbf8');
     await page.waitForTimeout(2000);
 
-    // If back button exists, click it
-    const backButton = page.locator('button:has-text("返回")');
-    if (await backButton.isVisible()) {
-      await backButton.click();
-      await expect(page).toHaveURL(/\/#?\/?$/);
-    }
+    // Navigate using browser back button
+    await page.goBack();
+    await expect(page).toHaveURL(/\/#?\/?$/);
   });
 });

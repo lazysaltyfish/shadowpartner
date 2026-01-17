@@ -214,11 +214,8 @@
 
             <!-- Play Page Content -->
             <div v-else-if="playPageData" class="flex-1 flex flex-col overflow-hidden gap-4">
-                <!-- Header with back button -->
-                <div class="flex items-center gap-4 mb-2">
-                    <button @click="goHome" class="text-gray-600 hover:text-gray-800">
-                        ← 返回
-                    </button>
+                <!-- Header -->
+                <div class="mb-2">
                     <h2 class="text-xl font-semibold text-gray-800 truncate">{{ playPageData.title }}</h2>
                 </div>
 
