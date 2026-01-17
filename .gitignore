@@ -37,3 +37,6 @@ frontend/test-results/
 
 # Logs
 *.log
+
+# Symlinks
+CLAUDE.md
