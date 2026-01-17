@@ -56,6 +56,15 @@
 - **Dual Player Support**: The frontend supports two video players: **YouTube IFrame API** (for YouTube URLs) and **ArtPlayer** (for uploaded local files).
 - **Strict Requirement**: Any changes to player-related functionality (playback controls, seeking, looping, time tracking, etc.) MUST work identically on BOTH players.
 - **Testing**: When modifying player code, you MUST test with both a YouTube video AND a local uploaded file to ensure consistent behavior.
+- **Audio-Only Mode**: When playing audio-only files (MP3, M4A, etc.), ArtPlayer automatically switches to compact mode:
+  - Container height reduced to 60px (controls only)
+  - Center play button overlay hidden via `art.template.$layer.style.display = 'none'`
+  - Mask overlay hidden via `art.template.$mask.style.display = 'none'`
+  - Detection: `video.videoWidth === 0 || video.videoHeight === 0`
+  - Implemented in two locations:
+    - `frontend/js/player.js` - `PlayerManager.initArtPlayer()` (play page)
+    - `frontend/js/app.js` - `initFilePlayer()` (upload page preview)
+  - CSS class `artplayer-audio-only` added for additional styling if needed
 
 ### Testing Requirements
 
@@ -709,6 +718,10 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
   - Unified player interface supports both YouTube IFrame API and ArtPlayer
   - Direct URL access to play page via `#/play/{asset_id}` supported
   - URL normalization strips `/index.html` to keep hash routes consistent; PWA `start_url` uses `/#/`
+- **Audio-Only Player Mode** (2026-01): ArtPlayer supports compact controls-only mode for audio files
+  - ArtPlayer's `template` API provides access to internal DOM elements: `$layer` (center play button), `$mask` (overlay), `$video`, `$controls`, etc.
+  - Use `art.template.$layer.style.display = 'none'` to hide the center play button overlay
+  - Detection method: `video.videoWidth === 0 || video.videoHeight === 0` in the `video:loadedmetadata` event
 
 ## Running the Application
 

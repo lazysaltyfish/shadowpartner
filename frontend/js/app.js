@@ -15,6 +15,7 @@ createApp({
         const fileInput = ref(null);
         const subtitleInput = ref(null);
         const warnings = ref([]);
+        const assetExists = ref(null); // { assetId, title } when asset already exists
         const isFileMode = ref(false); // New state to track if we're using file or URL
         const contextRange = ref(2); // Number of segments to show before and after current
         const backendStatus = ref({
@@ -976,16 +977,44 @@ createApp({
 
                 // Check if it's audio-only (no video dimensions)
                 if (video.videoWidth === 0 || video.videoHeight === 0) {
-                    // Audio-only: use 21:9 aspect ratio
-                    const newHeight = containerWidth / (21 / 9);
-                    container.style.height = `${newHeight}px`;
-                    artContainer.style.height = `${newHeight}px`;
-                    console.log('[ArtPlayer] Audio-only mode, using 21:9 aspect ratio:', containerWidth, 'x', newHeight);
+                    // Audio-only: compact 60px height for controls only
+                    artContainer.classList.add('artplayer-audio-only');
+                    container.style.height = '60px';
+                    container.style.minHeight = '60px';
+                    container.style.maxHeight = '60px';
+                    artContainer.style.height = '60px';
+                    artContainer.style.minHeight = '60px';
+                    artContainer.style.maxHeight = '60px';
+
+                    // Hide center play button layer
+                    if (art.template.$layer) {
+                        art.template.$layer.style.display = 'none';
+                    }
+                    // Hide mask overlay
+                    if (art.template.$mask) {
+                        art.template.$mask.style.display = 'none';
+                    }
+
+                    console.log('[ArtPlayer] Audio-only mode, using compact controls');
                 } else {
                     // Video: use 16:9 aspect ratio
                     const newHeight = containerWidth / (16 / 9);
+                    artContainer.classList.remove('artplayer-audio-only');
                     container.style.height = `${newHeight}px`;
+                    container.style.minHeight = '';
+                    container.style.maxHeight = '';
                     artContainer.style.height = `${newHeight}px`;
+                    artContainer.style.minHeight = '';
+                    artContainer.style.maxHeight = '';
+
+                    // Show layer and mask for video
+                    if (art.template.$layer) {
+                        art.template.$layer.style.display = '';
+                    }
+                    if (art.template.$mask) {
+                        art.template.$mask.style.display = '';
+                    }
+
                     console.log('[ArtPlayer] Video mode, using 16:9 aspect ratio:', containerWidth, 'x', newHeight);
                 }
             });
@@ -1413,6 +1442,14 @@ createApp({
                 });
 
                 if (!completeRes.ok) {
+                    if (completeRes.status === 409) {
+                        const errorData = await completeRes.json();
+                        assetExists.value = {
+                            assetId: errorData.detail.asset_id,
+                            title: errorData.detail.title || file.name
+                        };
+                        return null; // Signal that upload was skipped due to existing asset
+                    }
                     throw new Error("Failed to complete upload");
                 }
                 return task_id;
@@ -1450,6 +1487,7 @@ createApp({
             loading.value = true;
             videoData.value = null;
             warnings.value = [];
+            assetExists.value = null;
             taskStatus.value = { status: 'pending', progress: 0, message: 'Initializing...' };
             
             try {
@@ -1465,6 +1503,11 @@ createApp({
                     if (selectedFile.value.size > MAX_SIZE) {
                         console.log('[Debug] Large file detected, using chunked upload');
                         const taskId = await uploadChunks(selectedFile.value, selectedSubtitleFile.value);
+                        if (taskId === null && assetExists.value) {
+                            // Asset already exists, assetExists was set by uploadChunks
+                            loading.value = false;
+                            return;
+                        }
                         data = { task_id: taskId };
                     } else {
                         console.log('[Debug] Attempting upload to:', `${apiUrl}/upload`);
@@ -1480,6 +1523,15 @@ createApp({
                         });
 
                         if (!response.ok) {
+                            if (response.status === 409) {
+                                const errorData = await response.json();
+                                assetExists.value = {
+                                    assetId: errorData.detail.asset_id,
+                                    title: errorData.detail.title || selectedFile.value.name
+                                };
+                                loading.value = false;
+                                return;
+                            }
                             throw new Error(`API Error: ${response.statusText}`);
                         }
 
@@ -1506,6 +1558,15 @@ createApp({
                     });
 
                     if (!response.ok) {
+                        if (response.status === 409) {
+                            const errorData = await response.json();
+                            assetExists.value = {
+                                assetId: errorData.detail.asset_id,
+                                title: errorData.detail.title || videoUrl.value
+                            };
+                            loading.value = false;
+                            return;
+                        }
                         throw new Error(`API Error: ${response.statusText}`);
                     }
 
@@ -1715,6 +1776,7 @@ createApp({
             loading,
             videoData,
             warnings,
+            assetExists,
             closeWarnings: () => { warnings.value = []; },
             visibleSegments, // Export this so template can use it
             contextRange,    // Export for potential UI control

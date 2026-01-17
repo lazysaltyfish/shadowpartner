@@ -110,16 +110,49 @@ const PlayerManager = {
 
         console.log('[PlayerManager] ArtPlayer instance created');
 
-        // Handle aspect ratio
+        // Handle aspect ratio and audio-only mode
         art.on('video:loadedmetadata', () => {
             const video = art.video;
             const containerWidth = container.clientWidth;
-            if (video.videoWidth === 0 || video.videoHeight === 0) {
-                // Audio: use 21:9 aspect ratio
-                artContainer.style.height = `${containerWidth / (21 / 9)}px`;
+            const isAudioOnly = video.videoWidth === 0 || video.videoHeight === 0;
+
+            if (isAudioOnly) {
+                // Audio-only mode: set compact height for controls only
+                artContainer.classList.add('artplayer-audio-only');
+                container.style.height = '60px';
+                container.style.minHeight = '60px';
+                container.style.maxHeight = '60px';
+                artContainer.style.height = '60px';
+                artContainer.style.minHeight = '60px';
+                artContainer.style.maxHeight = '60px';
+
+                // Hide center play button layer
+                if (art.template.$layer) {
+                    art.template.$layer.style.display = 'none';
+                }
+                // Hide mask overlay
+                if (art.template.$mask) {
+                    art.template.$mask.style.display = 'none';
+                }
+
+                console.log('[PlayerManager] Audio-only mode enabled');
             } else {
                 // Video: use 16:9 aspect ratio
+                artContainer.classList.remove('artplayer-audio-only');
+                container.style.height = '';
+                container.style.minHeight = '';
+                container.style.maxHeight = '';
                 artContainer.style.height = `${containerWidth / (16 / 9)}px`;
+                artContainer.style.minHeight = '';
+                artContainer.style.maxHeight = '';
+
+                // Show layer and mask for video
+                if (art.template.$layer) {
+                    art.template.$layer.style.display = '';
+                }
+                if (art.template.$mask) {
+                    art.template.$mask.style.display = '';
+                }
             }
         });
 

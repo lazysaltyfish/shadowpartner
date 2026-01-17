@@ -27,6 +27,7 @@ from db import get_session
 from db.crud import (
     get_all_assets,
     get_asset_by_id,
+    get_asset_by_identifier,
     get_or_create_guest_user,
     get_subtitle_track_by_asset,
 )
@@ -74,6 +75,20 @@ def _as_clause(value: Any) -> ColumnElement[bool]:
     return cast(ColumnElement[bool], value)
 
 
+def _get_existing_asset(identifier: str, asset_type: AssetType) -> Optional[Asset]:
+    """Check if an asset with the given identifier and type already exists.
+
+    Args:
+        identifier: Asset identifier (YouTube ID or file hash)
+        asset_type: Asset type (YOUTUBE or UPLOAD)
+
+    Returns:
+        Asset if exists, None otherwise
+    """
+    with get_session() as db:
+        return get_asset_by_identifier(db, asset_type, identifier)
+
+
 async def handle_existing_file(
     file_path: str,
     filename: str,
@@ -103,17 +118,16 @@ async def handle_file_upload(
     file: UploadFile,
     filename: str,
     subtitle: Optional[UploadFile] = None,
-) -> tuple[str, Optional[VideoResponse], Optional[str], Optional[str]]:
-    """Handle file upload with cache check and temp storage.
+) -> tuple[str, Optional[str], Optional[str]]:
+    """Handle file upload and temp storage.
 
     Args:
         file: Uploaded file object
         filename: Original filename
-        auth_session: Auth session for user tracking
         subtitle: Optional subtitle file
 
     Returns:
-        (video_id, cached_result, temp_file, subtitle_path)
+        (video_id, temp_file, subtitle_path)
     """
     # Generate video_id from file hash
     await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)
@@ -124,15 +138,6 @@ async def handle_file_upload(
     video_id = await asyncio.to_thread(generate_video_id_from_file, temp_file)
     logger.info(f"Generated video_id: {video_id} for file: {filename}")
 
-    cached_result = check_cache(video_id)
-    if cached_result:
-        logger.info(f"Cached result found for: {video_id}, skipping processing")
-        try:
-            os.remove(temp_file)
-        except OSError as e:
-            logger.warning(f"Failed to remove temp file {temp_file}: {e}")
-        return video_id, cached_result, None, None
-
     subtitle_file = None
     if subtitle and subtitle.filename:
         subtitle_ext = os.path.splitext(subtitle.filename)[1] or ".srt"
@@ -140,7 +145,7 @@ async def handle_file_upload(
         await asyncio.to_thread(_write_upload_file, subtitle_file, subtitle, "wb")
         logger.info(f"Subtitle uploaded: {subtitle_file}")
 
-    return video_id, None, temp_file, subtitle_file
+    return video_id, temp_file, subtitle_file
 
 
 @router.get("/api/status/{task_id}", response_model=TaskInfo)
@@ -211,20 +216,20 @@ async def process_video(
             if not limit_ok:
                 raise HTTPException(status_code=429, detail="Session upload limit exceeded")
 
-        # Check for cached result
+        # Check for existing asset
         youtube_id = video_request.url.split("v=")[-1].split("&")[0].split("/watch?v=")[-1][:11]
-        cached_result = check_cache(youtube_id)
+        existing_asset = _get_existing_asset(youtube_id, AssetType.YOUTUBE)
 
-        if cached_result:
-            task_id = str(uuid.uuid4())
-            state.tasks[task_id] = TaskInfo(
-                task_id=task_id,
-                status=TaskStatus.COMPLETED,
-                progress=100,
-                message="Using cached processing result",
-                result=cached_result,
+        if existing_asset:
+            # Asset already exists, return 409 with asset info
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "该内容已存在",
+                    "asset_id": str(existing_asset.id),
+                    "title": existing_asset.meta.get("title") if existing_asset.meta else None,
+                },
             )
-            return AsyncProcessResponse(task_id=task_id, message="Using cached result")
 
         task_id = str(uuid.uuid4())
         state.tasks[task_id] = TaskInfo(
@@ -432,28 +437,12 @@ async def complete_upload(
                 subtitle_path = os.path.join(UPLOAD_DIR, subtitle_files[0])
                 logger.info(f"Task {task_id}: Found subtitle for completion - {subtitle_path}")
 
-        # Check for existing asset (deduplication only)
-        # Note: session.temp_file already contains the complete file
-        video_id, cached_result = await handle_existing_file(
-            file_path=session.temp_file,
-            filename=filename,
-        )
+        # Check for existing asset
+        video_id = await asyncio.to_thread(generate_video_id_from_file, session.temp_file)
+        existing_asset = _get_existing_asset(video_id, AssetType.UPLOAD)
 
-        if cached_result:
-            # Update the existing task with cached result
-            state.tasks[task_id] = TaskInfo(
-                task_id=task_id,
-                status=TaskStatus.COMPLETED,
-                progress=100,
-                message="Using cached processing result",
-                result=cached_result,
-            )
-            session.completed = True
-            session.processing_started = True
-            if not await session_manager.update_session_upload(
-                auth_session, total_size, task_increment=True
-            ):
-                raise HTTPException(status_code=429, detail="Session upload limit exceeded")
+        if existing_asset:
+            # Clean up temp files
             if session.temp_file and os.path.exists(session.temp_file):
                 try:
                     os.remove(session.temp_file)
@@ -465,7 +454,16 @@ async def complete_upload(
                 except OSError as e:
                     logger.warning(f"Failed to remove subtitle file {subtitle_path}: {e}")
             release_upload_session(task_id)
-            return AsyncProcessResponse(task_id=task_id, message="Using cached result")
+
+            # Asset already exists, return 409 with asset info
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "该内容已存在",
+                    "asset_id": str(existing_asset.id),
+                    "title": existing_asset.meta.get("title") if existing_asset.meta else filename,
+                },
+            )
 
         # Start processing
         state.tasks[task_id].status = TaskStatus.PENDING
@@ -534,10 +532,8 @@ async def upload_video(
 
     await validate_upload_file(file)
 
-    # Handle file upload with Asset creation and deduplication
-    video_id, cached_result, temp_file, subtitle_path = await handle_file_upload(
-        file, file.filename, subtitle
-    )
+    # Handle file upload and check for existing asset
+    video_id, temp_file, subtitle_path = await handle_file_upload(file, file.filename, subtitle)
 
     file_size = file.size if file.size is not None else 0
     limit_ok = await session_manager.update_session_upload(
@@ -546,16 +542,30 @@ async def upload_video(
     if not limit_ok:
         raise HTTPException(status_code=429, detail="Session upload limit exceeded")
 
-    if cached_result:
-        task_id = str(uuid.uuid4())
-        state.tasks[task_id] = TaskInfo(
-            task_id=task_id,
-            status=TaskStatus.COMPLETED,
-            progress=100,
-            message="Using cached processing result",
-            result=cached_result,
+    # Check for existing asset
+    existing_asset = _get_existing_asset(video_id, AssetType.UPLOAD)
+    if existing_asset:
+        # Clean up temp files
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except OSError as e:
+                logger.warning(f"Failed to remove temp file {temp_file}: {e}")
+        if subtitle_path and os.path.exists(subtitle_path):
+            try:
+                os.remove(subtitle_path)
+            except OSError as e:
+                logger.warning(f"Failed to remove subtitle file {subtitle_path}: {e}")
+
+        # Asset already exists, return 409 with asset info
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "该内容已存在",
+                "asset_id": str(existing_asset.id),
+                "title": existing_asset.meta.get("title") if existing_asset.meta else file.filename,
+            },
         )
-        return AsyncProcessResponse(task_id=task_id, message="Using cached result")
 
     # Start async task
     task_id = str(uuid.uuid4())

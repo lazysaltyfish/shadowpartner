@@ -21,3 +21,12 @@ ruby rt {
   height: 100%;
   display: block;
 }
+
+/* ArtPlayer audio-only mode - compact controls only */
+.artplayer-app.artplayer-audio-only {
+  height: 60px !important;
+  min-height: 60px;
+  max-height: 60px;
+  overflow: hidden !important;
+  background: #000 !important;
+}
