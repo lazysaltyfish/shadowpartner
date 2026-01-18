@@ -342,7 +342,7 @@
                                         <span
                                             v-for="(word, wIndex) in segment.words"
                                             :key="wIndex"
-                                            class="group inline-block px-1 rounded transition-all duration-150 cursor-pointer select-none"
+                                            class="group inline-block px-1 rounded transition-all duration-100 cursor-pointer select-none"
                                             :class="{
                                                 'bg-blue-600 text-white shadow-sm': isWordActive(word, segment),
                                                 'hover:bg-gray-700': !isWordActive(word, segment)
@@ -529,7 +529,7 @@
                             <span
                                 v-for="(word, wIndex) in segment.words"
                                 :key="wIndex"
-                                class="group inline-block px-1 rounded transition-all duration-150 cursor-pointer select-none"
+                                class="group inline-block px-1 rounded transition-all duration-100 cursor-pointer select-none"
                                 :class="{
                                     'bg-blue-600 text-white shadow-sm': isWordActive(word, segment),
                                     'hover:bg-gray-700': !isWordActive(word, segment)

@@ -41,6 +41,15 @@ ruby rt {
   user-select: none; /* 防止复制文本时选中注音 */
 }
 
+/* Smooth subtitle word highlighting transitions */
+.subtitle-word {
+  transition: background-color 0.1s ease, color 0.1s ease, text-shadow 0.1s ease;
+}
+
+.subtitle-word rt {
+  transition: color 0.1s ease;
+}
+
 /* Keep YouTube embeds at a stable 16:9 size */
 #youtube-player {
   width: 100%;
