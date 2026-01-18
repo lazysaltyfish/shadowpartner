@@ -70,7 +70,10 @@ createApp({
             handleDictationEnter,
             toggleDictationPlayback,
             getDictationProgress,
-            resetDictationState
+            resetDictationState,
+            validateInputRealtime,
+            getInputBorderClass,
+            getFocusRingClass
         } = useDictation();
 
         // Admin panel

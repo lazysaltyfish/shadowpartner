@@ -360,13 +360,27 @@
                                     v-if="dictation.mode !== 'review'"
                                     v-model="dictation.userInput"
                                     @compositionstart="dictation.isComposing = true"
-                                    @compositionend="dictation.isComposing = false"
+                                    @compositionend="dictation.isComposing = false; validateInputRealtime(videoData)"
+                                    @input="validateInputRealtime(videoData)"
                                     @keydown.enter.prevent="handleDictationEnter"
-                                    class="w-full max-w-2xl bg-gray-800 border-2 border-gray-700 focus:border-blue-500 rounded-xl p-4 text-xl text-white placeholder-gray-600 focus:outline-none focus:ring-4 focus:ring-blue-500/20 transition-all resize-none text-center leading-relaxed"
+                                    :class="[
+                                        'w-full max-w-2xl bg-gray-800 border-2 rounded-xl p-4 text-xl text-white placeholder-gray-600 focus:outline-none focus:ring-4 transition-all resize-none text-center leading-relaxed',
+                                        dictation.realtimeScore === null
+                                            ? 'border-gray-700 focus:border-blue-500 focus:ring-blue-500/20'
+                                            : dictation.realtimeScore >= 80
+                                            ? 'border-green-500 focus:border-green-500 focus:ring-green-500/20'
+                                            : dictation.realtimeScore >= 40
+                                            ? 'border-yellow-500 focus:border-yellow-500 focus:ring-yellow-500/20'
+                                            : 'border-red-500 focus:border-red-500 focus:ring-red-500/20'
+                                    ]"
                                     rows="3"
                                     placeholder="Type what you hear..."
                                     inputmode="text"
                                 ></textarea>
+
+                                <div v-if="dictation.realtimeScore !== null && dictation.mode === 'listen'" class="text-sm text-gray-400 mt-2">
+                                    实时准确度: <span :class="dictation.realtimeScore >= 80 ? 'text-green-400' : dictation.realtimeScore >= 40 ? 'text-yellow-400' : 'text-red-400'">{{ dictation.realtimeScore }}%</span>
+                                </div>
 
                                 <div v-if="dictation.mode === 'review'" class="w-full max-w-2xl text-center text-xl leading-relaxed font-medium bg-gray-800/50 p-6 rounded-xl border border-gray-700">
                                     <span v-for="(char, idx) in dictation.diffResult" :key="idx"
@@ -529,17 +543,31 @@
                     </button>
                     <div class="text-gray-400 text-xs">{{ dictation.isPlaying ? 'Looping...' : 'Click to listen' }}</div>
 
-                    <textarea 
+                    <textarea
                         v-if="dictation.mode !== 'review'"
                         v-model="dictation.userInput"
                         @compositionstart="dictation.isComposing = true"
-                        @compositionend="dictation.isComposing = false"
+                        @compositionend="dictation.isComposing = false; validateInputRealtime(videoData)"
+                        @input="validateInputRealtime(videoData)"
                         @keydown.enter.prevent="handleDictationEnter"
-                        class="w-full max-w-2xl bg-gray-800 border-2 border-gray-700 focus:border-blue-500 rounded-xl p-4 text-xl text-white placeholder-gray-600 focus:outline-none focus:ring-4 focus:ring-blue-500/20 transition-all resize-none text-center leading-relaxed"
+                        :class="[
+                            'w-full max-w-2xl bg-gray-800 border-2 rounded-xl p-4 text-xl text-white placeholder-gray-600 focus:outline-none focus:ring-4 transition-all resize-none text-center leading-relaxed',
+                            dictation.realtimeScore === null
+                                ? 'border-gray-700 focus:border-blue-500 focus:ring-blue-500/20'
+                                : dictation.realtimeScore >= 80
+                                ? 'border-green-500 focus:border-green-500 focus:ring-green-500/20'
+                                : dictation.realtimeScore >= 40
+                                ? 'border-yellow-500 focus:border-yellow-500 focus:ring-yellow-500/20'
+                                : 'border-red-500 focus:border-red-500 focus:ring-red-500/20'
+                        ]"
                         rows="3"
                         placeholder="Type what you hear..."
                         inputmode="text"
                     ></textarea>
+
+                    <div v-if="dictation.realtimeScore !== null && dictation.mode === 'listen'" class="text-sm text-gray-400 mt-2">
+                        实时准确度: <span :class="dictation.realtimeScore >= 80 ? 'text-green-400' : dictation.realtimeScore >= 40 ? 'text-yellow-400' : 'text-red-400'">{{ dictation.realtimeScore }}%</span>
+                    </div>
 
                     <div v-if="dictation.mode === 'review'" class="w-full max-w-2xl text-center text-xl leading-relaxed font-medium bg-gray-800/50 p-6 rounded-xl border border-gray-700">
                         <span v-for="(char, idx) in dictation.diffResult" :key="idx"

@@ -45,9 +45,13 @@ function useDictation() {
         currentScore: null,
         totalAttempts: 0,
         correctCount: 0,
+        realtimeScore: null,
     });
 
     const targetPauseTime = Vue.ref(null);
+
+    // Debounce timer for realtime validation
+    let debounceTimer = null;
 
 
     /**
@@ -116,6 +120,69 @@ function useDictation() {
     };
 
     /**
+     * Validate input with debouncing for realtime feedback.
+     * @param {Object} videoData - Video data with segments
+     * @param {number} delay - Debounce delay in ms (default 500)
+     */
+    const validateInputRealtime = (videoData, delay = 500) => {
+        if (debounceTimer) {
+            clearTimeout(debounceTimer);
+        }
+
+        if (!dictation.userInput.trim()) {
+            dictation.realtimeScore = null;
+            return;
+        }
+
+        if (dictation.isComposing) {
+            return;
+        }
+
+        debounceTimer = setTimeout(() => {
+            const segment = getCurrentSegment(videoData);
+            if (!segment) return;
+
+            const correctText = getSegmentText(segment);
+            const { score } = generateDiff(correctText, dictation.userInput);
+            dictation.realtimeScore = score;
+        }, delay);
+    };
+
+    /**
+     * Get input border color class based on realtime score.
+     * @returns {string} Tailwind CSS class for border color
+     */
+    const getInputBorderClass = () => {
+        if (dictation.realtimeScore === null) {
+            return 'border-gray-700';
+        }
+        if (dictation.realtimeScore >= 80) {
+            return 'border-green-500';
+        }
+        if (dictation.realtimeScore >= 40) {
+            return 'border-yellow-500';
+        }
+        return 'border-red-500';
+    };
+
+    /**
+     * Get focus ring color class based on realtime score.
+     * @returns {string} Tailwind CSS class for focus ring color
+     */
+    const getFocusRingClass = () => {
+        if (dictation.realtimeScore === null) {
+            return 'focus:border-blue-500 focus:ring-blue-500/20';
+        }
+        if (dictation.realtimeScore >= 80) {
+            return 'focus:border-green-500 focus:ring-green-500/20';
+        }
+        if (dictation.realtimeScore >= 40) {
+            return 'focus:border-yellow-500 focus:ring-yellow-500/20';
+        }
+        return 'focus:border-red-500 focus:ring-red-500/20';
+    };
+
+    /**
      * Check the user's answer against the correct text.
      * @param {Object} videoData - Video data with segments
      */
@@ -179,6 +246,11 @@ function useDictation() {
         dictation.mode = 'listen';
         dictation.diffResult = [];
         dictation.currentScore = null;
+        dictation.realtimeScore = null;
+        if (debounceTimer) {
+            clearTimeout(debounceTimer);
+            debounceTimer = null;
+        }
     };
 
     /**
@@ -235,6 +307,11 @@ function useDictation() {
         dictation.isPlaying = false;
         dictation.diffResult = [];
         dictation.currentScore = null;
+        dictation.realtimeScore = null;
+        if (debounceTimer) {
+            clearTimeout(debounceTimer);
+            debounceTimer = null;
+        }
     };
 
     return {
@@ -255,7 +332,10 @@ function useDictation() {
         handleDictationEnter,
         toggleDictationPlayback,
         getDictationProgress,
-        resetDictationState
+        resetDictationState,
+        validateInputRealtime,
+        getInputBorderClass,
+        getFocusRingClass
     };
 }
 
