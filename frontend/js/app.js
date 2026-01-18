@@ -426,10 +426,8 @@ createApp({
 
             art.on('video:timeupdate', () => {
                 const time = art.currentTime;
-                if (Math.abs(time - currentTime.value) > 0.1) {
-                    currentTime.value = time;
-                    updateActiveWords();
-                }
+                currentTime.value = time;
+                updateActiveWords();
             });
 
             player.value = {
@@ -452,10 +450,8 @@ createApp({
             window._pollInterval = setInterval(() => {
                 if (player.value && player.value.getCurrentTime) {
                     const time = player.value.getCurrentTime();
-                    if (Math.abs(time - currentTime.value) > 0.1) {
-                        currentTime.value = time;
-                        updateActiveWords();
-                    }
+                    currentTime.value = time;
+                    updateActiveWords();
 
                     if (dictation.active && dictation.isPlaying) {
                         const segment = videoData.value?.segments?.[dictation.segmentIndex];
@@ -465,7 +461,7 @@ createApp({
                         }
                     }
                 }
-            }, 100);
+            }, 50);
         };
 
         const onPlayerReady = (event) => {
