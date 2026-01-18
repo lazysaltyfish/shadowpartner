@@ -96,6 +96,140 @@ createApp({
         const editForm = ref({ assetId: '', title: '', description: '' });
         const editSaving = ref(false);
 
+        // Toast notification system
+        const toasts = ref([]);
+        let toastIdCounter = 0;
+
+        /**
+         * Show a toast notification.
+         * @param {string} message - The message to display
+         * @param {string} type - 'success' | 'error' | 'warning' | 'info'
+         * @param {number} duration - Auto-dismiss duration in ms (0 for no auto-dismiss)
+         */
+        const showToast = (message, type = 'info', duration = 3000) => {
+            const id = toastIdCounter++;
+            const toast = { id, message, type, duration };
+            toasts.value.push(toast);
+
+            // Auto-dismiss after duration
+            if (duration > 0) {
+                setTimeout(() => {
+                    removeToast(id);
+                }, duration);
+            }
+
+            return id;
+        };
+
+        /**
+         * Remove a toast notification.
+         * @param {number} id - Toast ID to remove
+         */
+        const removeToast = (id) => {
+            const index = toasts.value.findIndex(t => t.id === id);
+            if (index !== -1) {
+                toasts.value.splice(index, 1);
+            }
+        };
+
+        // Custom confirm dialog
+        const confirmDialog = ref({
+            show: false,
+            title: '',
+            message: '',
+            confirmText: 'Confirm',
+            cancelText: 'Cancel',
+            type: 'danger', // 'danger' | 'info'
+            _resolve: null
+        });
+
+        // Debug: Expose a global method to reset the dialog
+        window.resetConfirmDialog = () => {
+            console.log('[Debug] Resetting confirmDialog');
+            confirmDialog.value.show = false;
+        };
+
+        // Debug: Diagnose modal states
+        window.diagnoseModals = () => {
+            console.log('=== Modal States ===');
+            console.log('confirmDialog.show:', confirmDialog.value.show);
+            console.log('adminShowDeleteModal:', adminShowDeleteModal.value);
+            console.log('adminShowEditModal:', adminShowEditModal.value);
+            console.log('adminPlaylistModalOpen:', adminPlaylistModalOpen.value);
+            console.log('adminPlaylistSearchOpen:', adminPlaylistSearchOpen.value);
+            console.log('showEditModal:', showEditModal.value);
+            console.log('warnings:', warnings.value);
+            console.log('==================');
+        };
+
+        // Reset all modals (emergency fix)
+        window.resetAllModals = () => {
+            console.log('[Debug] Resetting all modals');
+            confirmDialog.value.show = false;
+            adminShowDeleteModal.value = false;
+            adminShowEditModal.value = false;
+            adminPlaylistModalOpen.value = false;
+            adminPlaylistSearchOpen.value = false;
+            showEditModal.value = false;
+            warnings.value = [];
+        };
+
+        /**
+         * Show a custom confirm dialog.
+         * @param {Object} options - Dialog options
+         * @returns {Promise<boolean>} - True if confirmed, false if cancelled
+         */
+        const showConfirm = (options) => {
+            return new Promise((resolve) => {
+                console.log('[Debug] showConfirm called with:', options);
+                confirmDialog.value = {
+                    show: true,
+                    title: options.title || 'Confirm',
+                    message: options.message || '',
+                    confirmText: options.confirmText || 'Confirm',
+                    cancelText: options.cancelText || 'Cancel',
+                    type: options.type || 'info',
+                    _resolve: resolve
+                };
+                console.log('[Debug] confirmDialog.value.show:', confirmDialog.value.show);
+            });
+        };
+
+        const handleConfirmOk = () => {
+            if (confirmDialog.value._resolve) {
+                confirmDialog.value._resolve(true);
+            }
+            confirmDialog.value.show = false;
+        };
+
+        const handleConfirmCancel = () => {
+            if (confirmDialog.value._resolve) {
+                confirmDialog.value._resolve(false);
+            }
+            confirmDialog.value.show = false;
+        };
+
+        const toastIcon = (type) => {
+            const icons = {
+                success: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>',
+                error: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>',
+                warning: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>',
+                info: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>'
+            };
+            return icons[type] || icons.info;
+        };
+
+        const toastClasses = (type) => {
+            const baseClasses = 'pointer-events-auto shadow-lg rounded-lg px-4 py-3 flex items-center gap-3 min-w-[300px] max-w-md transition-all';
+            const typeClasses = {
+                success: 'bg-green-50 border-l-4 border-green-500 text-green-800',
+                error: 'bg-red-50 border-l-4 border-red-500 text-red-800',
+                warning: 'bg-yellow-50 border-l-4 border-yellow-500 text-yellow-800',
+                info: 'bg-blue-50 border-l-4 border-blue-500 text-blue-800'
+            };
+            return `${baseClasses} ${typeClasses[type] || typeClasses.info}`;
+        };
+
         // AbortController for canceling requests on page unload
         let abortController = new AbortController();
         let pollTimeoutId = null;
@@ -426,11 +560,11 @@ createApp({
                     clearAdminState();
                 } else {
                     const errorData = await response.json();
-                    alert(errorData.detail || 'Delete failed');
+                    showToast(errorData.detail || 'Delete failed', 'error');
                 }
             } catch (e) {
                 console.error('Admin delete error:', e);
-                alert(e.message || 'Delete failed');
+                showToast(e.message || 'Delete failed', 'error');
             } finally {
                 adminDeleting.value = false;
             }
@@ -473,7 +607,7 @@ createApp({
                 await adminLoadData();
             } catch (e) {
                 console.error('Admin save error:', e);
-                alert(e.message || 'Failed to save');
+                showToast(e.message || 'Failed to save', 'error');
             } finally {
                 adminEditSaving.value = false;
             }
@@ -510,7 +644,7 @@ createApp({
                 await adminLoadData();
             } catch (e) {
                 console.error('Admin playlist save error:', e);
-                alert(e.message || 'Failed to save playlist');
+                showToast(e.message || 'Failed to save', 'error');
             } finally {
                 adminPlaylistSaving.value = false;
             }
@@ -527,20 +661,20 @@ createApp({
                 return;
             }
             if (!playlist.item_count) {
-                alert('Playlist is empty');
+                showToast('Playlist is empty', 'warning');
                 return;
             }
             try {
                 const data = await API.getPlaylistItems(playlist.id);
                 const firstItem = data.items?.[0];
                 if (!firstItem) {
-                    alert('Playlist is empty');
+                    showToast('Playlist is empty', 'warning');
                     return;
                 }
                 Router.goToPlay(firstItem.asset_id, { playlistId: playlist.id });
             } catch (e) {
                 console.error('Failed to open playlist play page:', e);
-                alert(e.message || 'Failed to open playlist');
+                showToast(e.message || 'Failed to open', 'error');
             }
         };
 
@@ -550,7 +684,7 @@ createApp({
                 adminPlaylistItems.value = data.items || [];
             } catch (e) {
                 console.error('Failed to load playlist items:', e);
-                alert(e.message || 'Failed to load playlist items');
+                showToast(e.message || 'Failed to load', 'error');
             }
         };
 
@@ -573,7 +707,7 @@ createApp({
                 adminPlaylistSearchResults.value = data.items || [];
             } catch (e) {
                 console.error('Playlist search failed:', e);
-                alert(e.message || 'Search failed');
+                showToast(e.message || 'Search failed', 'error');
             } finally {
                 adminPlaylistSearchLoading.value = false;
             }
@@ -591,7 +725,7 @@ createApp({
                 adminPlaylistSearchOpen.value = false;
             } catch (e) {
                 console.error('Failed to add playlist item:', e);
-                alert(e.message || 'Failed to add item');
+                showToast(e.message || 'Failed to add', 'error');
             }
         };
 
@@ -612,7 +746,7 @@ createApp({
                 await adminLoadPlaylistItems(adminActivePlaylist.value.id);
             } catch (e) {
                 console.error('Failed to move playlist item:', e);
-                alert(e.message || 'Failed to reorder item');
+                showToast(e.message || 'Failed to reorder', 'error');
             }
         };
 
@@ -620,7 +754,13 @@ createApp({
             if (!adminActivePlaylist.value) {
                 return;
             }
-            const confirmRemove = window.confirm(`Remove "${item.cached_title}"?`);
+            const confirmRemove = await showConfirm({
+                title: 'Remove Item',
+                message: `Remove "${item.cached_title}" from this playlist?`,
+                confirmText: 'Remove',
+                cancelText: 'Cancel',
+                type: 'danger'
+            });
             if (!confirmRemove) {
                 return;
             }
@@ -629,7 +769,7 @@ createApp({
                 await adminLoadPlaylistItems(adminActivePlaylist.value.id);
             } catch (e) {
                 console.error('Failed to remove playlist item:', e);
-                alert(e.message || 'Failed to remove item');
+                showToast(e.message || 'Failed to remove', 'error');
             }
         };
 
@@ -1543,7 +1683,7 @@ createApp({
                     const match = videoUrl.value.match(regExp);
                     
                     if (!match || match[2].length !== 11) {
-                        alert('无效的 YouTube 链接');
+                        showToast('无效的 YouTube 链接', 'error');
                         loading.value = false;
                         return;
                     }
@@ -1592,7 +1732,7 @@ createApp({
                 
             } catch (e) {
                 console.error(e);
-                alert(`处理失败: ${e.message}`);
+                showToast(`处理失败: ${e.message}`, 'error');
                 loading.value = false;
             }
         };
@@ -1694,7 +1834,7 @@ createApp({
                         return;
                     }
                     console.error("Polling error:", e);
-                    alert(`处理出错: ${e.message}`);
+                    showToast(`处理出错: ${e.message}`, 'error');
                     loading.value = false;
                 }
             };
@@ -1760,7 +1900,7 @@ createApp({
                 Router.goToPlay(editForm.value.assetId);
             } catch (e) {
                 console.error('Failed to save asset meta:', e);
-                alert('保存失败: ' + e.message);
+                showToast('保存失败: ' + e.message, 'error');
             } finally {
                 editSaving.value = false;
             }
@@ -1886,7 +2026,18 @@ createApp({
             adminSearchPlaylistAssets,
             adminAddPlaylistAsset,
             adminMovePlaylistItem,
-            adminRemovePlaylistItem
+            adminRemovePlaylistItem,
+            // Toast notification system
+            toasts,
+            showToast,
+            removeToast,
+            toastIcon,
+            toastClasses,
+            // Custom confirm dialog
+            confirmDialog,
+            showConfirm,
+            handleConfirmOk,
+            handleConfirmCancel
         };
     }
 }).mount('#app');
