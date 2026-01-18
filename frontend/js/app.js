@@ -1,163 +1,257 @@
+/**
+ * ShadowPartner Main Application
+ * Refactored to use composables for better code organization
+ */
+
 const { createApp, ref, reactive, onMounted, onUnmounted, nextTick, computed, watch } = Vue;
 
 createApp({
     setup() {
-        const videoUrl = ref('');
-        const loading = ref(false);
-        const videoData = ref(null);
-        const player = ref(null);
-        const currentTime = ref(0);
-        const currentSegmentIndex = ref(-1);
-        const segmentRefs = ref({});
-        const subtitleContainer = ref(null);
-        const selectedFile = ref(null);
-        const selectedSubtitleFile = ref(null);
-        const fileInput = ref(null);
-        const subtitleInput = ref(null);
-        const warnings = ref([]);
-        const assetExists = ref(null); // { assetId, title } when asset already exists
-        const isFileMode = ref(false); // New state to track if we're using file or URL
-        const contextRange = ref(2); // Number of segments to show before and after current
-        const backendStatus = ref({
-            online: false,
-            lastCheck: null,
-            details: null
-        });
-        const taskStatus = ref(null); // { status: 'pending', progress: 0, message: '' }
-        const apiBaseUrl = ref('http://localhost:8000');
-        const apiReady = ref(false);
-        const routeReady = ref(false);
-        const appReady = computed(() => apiReady.value && routeReady.value);
-        const sessionId = ref(null);
-        const SESSION_STORAGE_KEY = 'shadowpartner_session_id';
-        const SESSION_HEADER_NAME = 'X-Session-Id';
+        // ========================================================================
+        // COMPOSABLES - Extracted logic modules
+        // ========================================================================
+
+        // Toast notification system
+        const {
+            toasts,
+            showToast,
+            removeToast,
+            toastIcon,
+            toastClasses
+        } = useToast();
+
+        // Custom confirm dialog
+        const {
+            confirmDialog,
+            showConfirm,
+            handleConfirmOk,
+            handleConfirmCancel
+        } = useConfirmDialog();
+
+        // Backend and session management
+        const {
+            apiBaseUrl,
+            apiReady,
+            backendStatus,
+            sessionId,
+            appReady,
+            resolveApiBaseUrl,
+            checkBackendHealth,
+            initBackend,
+            cleanup: backendCleanup,
+            ensureSession,
+            buildSessionHeaders,
+            fetchWithAuth,
+            buildAdminHeaders
+        } = useBackend();
+
+        // Home page asset management
+        const {
+            homeAssets,
+            homeLoading,
+            homeHasMore,
+            loadHomeAssets,
+            resetHomeAssets
+        } = useHomeAssets();
+
+        // Dictation game mode
+        const {
+            dictation,
+            targetPauseTime,
+            getCurrentSegment,
+            getSegmentText,
+            getCurrentDictationText,
+            checkAnswer,
+            gotoPrevSegment,
+            gotoNextSegment,
+            skipCurrentSegment,
+            resetDictationInput,
+            handleDictationMainAction,
+            handleDictationEnter,
+            toggleDictationPlayback,
+            getDictationProgress,
+            resetDictationState
+        } = useDictation();
+
+        // Admin panel
+        const {
+            adminSession,
+            adminLoading,
+            adminError,
+            adminActiveTab,
+            adminUsers,
+            adminAssets,
+            adminSubtitleTracks,
+            adminPlaylists,
+            adminShowDeleteModal,
+            adminDeleteTarget,
+            adminDeleting,
+            adminLoginForm,
+            adminShowEditModal,
+            adminEditForm,
+            adminEditSaving,
+            adminActivePlaylist,
+            adminPlaylistItems,
+            adminPlaylistView,
+            adminPlaylistModalOpen,
+            adminPlaylistForm,
+            adminPlaylistSaving,
+            adminPlaylistSearchOpen,
+            adminPlaylistSearchQuery,
+            adminPlaylistSearchResults,
+            adminPlaylistSearchLoading,
+            isAdminMode,
+            adminFormatDate,
+            clearAdminState,
+            adminHandleLogin,
+            adminHandleLogout,
+            adminLoadData,
+            adminConfirmDelete,
+            adminExecuteDelete,
+            adminOpenPlayPage,
+            adminGoToUpload,
+            adminOpenEditModal,
+            adminSaveAssetMeta,
+            adminOpenPlaylistModal,
+            adminSavePlaylist,
+            adminOpenPlaylistDetail,
+            adminOpenPlaylistPlay,
+            adminLoadPlaylistItems,
+            adminBackToPlaylists,
+            adminOpenPlaylistSearch,
+            adminSearchPlaylistAssets,
+            adminAddPlaylistAsset,
+            adminMovePlaylistItem,
+            adminRemovePlaylistItem
+        } = useAdminPanel({ apiBaseUrl, buildAdminHeaders, showToast, showConfirm });
+
+        // File upload and processing
+        const {
+            loading,
+            videoUrl,
+            videoData,
+            selectedFile,
+            selectedSubtitleFile,
+            warnings,
+            assetExists,
+            isFileMode,
+            taskStatus,
+            fileInput,
+            subtitleInput,
+            handleFileUpload,
+            handleFileDrop,
+            handleSubtitleUpload,
+            clearFile,
+            clearSubtitleFile,
+            processVideo,
+            resetUploadState,
+            cleanupPolling
+        } = useFileUpload({ apiBaseUrl, fetchWithAuth, showToast });
+
+        // ========================================================================
+        // UPLOAD HANDLER - Wrap processVideo with completion logic
+        // ========================================================================
+
+        /**
+         * Handle video processing with completion callback.
+         * This wrapper is needed because useFileUpload.processVideo requires
+         * an onCompleted callback to handle navigation after processing.
+         */
+        const handleProcessVideo = async () => {
+            await processVideo(async (result) => {
+                console.log('[Debug] Processing completed. Result:', result);
+
+                // Auto-redirect to play page if asset_id is available
+                if (result.asset_id) {
+                    // For admin uploads, show edit modal first
+                    if (isAdminMode.value) {
+                        console.log('[Debug] Admin mode: showing edit modal for asset:', result.asset_id);
+                        editForm.value = {
+                            assetId: result.asset_id,
+                            title: result.title || '',
+                            description: ''
+                        };
+                        showEditModal.value = true;
+                        return;
+                    }
+                    console.log('[Debug] Redirecting to play page:', result.asset_id);
+                    Router.goToPlay(result.asset_id);
+                    return;
+                }
+
+                // Fallback: show in current page (for backward compatibility)
+                console.log('[Debug] No asset_id, showing in current page');
+
+                // Set warnings BEFORE videoData to ensure modal shows correctly
+                if (result.warnings && Array.isArray(result.warnings) && result.warnings.length > 0) {
+                    warnings.value = result.warnings;
+                } else {
+                    warnings.value = [];
+                }
+
+                videoData.value = result;
+
+                // Check if segments exist
+                if (result.segments && result.segments.length > 0) {
+                    console.log(`[Debug] Loaded ${result.segments.length} segments`);
+                } else {
+                    console.warn('[Debug] No segments found in result');
+                }
+
+                // Wait for Vue to update the DOM so that #youtube-player exists
+                nextTick(() => {
+                    if (isFileMode.value) {
+                        initFilePlayer(selectedFile.value);
+                    } else {
+                        initPlayer(result.video_id);
+                    }
+                });
+            });
+        };
+
+        // ========================================================================
+        // LOCAL STATE - State not extracted to composables
+        // ========================================================================
 
         // Router state
-        const currentRoute = ref('home'); // 'home' | 'upload' | 'play'
-        const playPageData = ref(null); // Asset data for play page
+        const currentRoute = ref('home');
+        const playPageData = ref(null);
         const playPageLoading = ref(false);
         const playPageError = ref(null);
         const playlistContext = ref(null);
         const playlistContextLoading = ref(false);
 
-        // Navigation context for Play page (breadcrumbs, back button)
+        // Navigation context for Play page
         const navigationContext = reactive({
-            source: 'direct', // 'home' | 'playlist' | 'upload' | 'admin' | 'direct'
+            source: 'direct',
             playlistId: null,
             playlistTitle: null,
             canGoBack: false
         });
 
-        // Home page state
-        const homeAssets = ref([]);
-        const homeLoading = ref(false);
-        const homeHasMore = ref(true);
-        const HOME_PAGE_SIZE = 20;
+        // Route ready flag - start as true, only false during transitions
+        const routeReady = ref(true);
 
-        const dictation = reactive({
-            active: false,
-            segmentIndex: 0,
-            mode: 'listen',
-            loop: false,
-            userInput: '',
-            isComposing: false,
-            isPlaying: false,
-            answersByIndex: {},
-            statusByIndex: {},
-            diffResult: [],
-            currentScore: null,
-            totalAttempts: 0,
-            correctCount: 0,
-        });
-        const targetPauseTime = ref(null);
+        // Player state
+        const player = ref(null);
+        const currentTime = ref(0);
+        const currentSegmentIndex = ref(-1);
+        const segmentRefs = ref({});
+        const subtitleContainer = ref(null);
 
-        // Admin panel state (SPA)
-        const adminSession = ref(API.getAdminSessionId());
-        const adminLoading = ref(false);
-        const adminError = ref(null);
-        const adminActiveTab = ref('users');
-        const adminUsers = ref([]);
-        const adminAssets = ref([]);
-        const adminSubtitleTracks = ref([]);
-        const adminShowDeleteModal = ref(false);
-        const adminDeleteTarget = ref({ type: '', id: '', identifier: '' });
-        const adminDeleting = ref(false);
-        const adminLoginForm = ref({ username: '', password: '' });
-        const adminShowEditModal = ref(false);
-        const adminEditForm = ref({ assetId: '', title: '', description: '' });
-        const adminEditSaving = ref(false);
-        const adminPlaylists = ref([]);
-        const adminActivePlaylist = ref(null);
-        const adminPlaylistItems = ref([]);
-        const adminPlaylistView = ref('list');
-        const adminPlaylistModalOpen = ref(false);
-        const adminPlaylistForm = ref({ id: null, title: '', description: '', cover_image: '' });
-        const adminPlaylistSaving = ref(false);
-        const adminPlaylistSearchOpen = ref(false);
-        const adminPlaylistSearchQuery = ref('');
-        const adminPlaylistSearchResults = ref([]);
-        const adminPlaylistSearchLoading = ref(false);
+        // Subtitle context range
+        const contextRange = ref(2);
 
-        // Admin mode state
-        const isAdminMode = computed(() => !!adminSession.value);
+        // Admin mode edit modal (for upload flow)
         const showEditModal = ref(false);
         const editForm = ref({ assetId: '', title: '', description: '' });
         const editSaving = ref(false);
 
-        // Toast notification system
-        const toasts = ref([]);
-        let toastIdCounter = 0;
-
-        /**
-         * Show a toast notification.
-         * @param {string} message - The message to display
-         * @param {string} type - 'success' | 'error' | 'warning' | 'info'
-         * @param {number} duration - Auto-dismiss duration in ms (0 for no auto-dismiss)
-         */
-        const showToast = (message, type = 'info', duration = 3000) => {
-            const id = toastIdCounter++;
-            const toast = { id, message, type, duration };
-            toasts.value.push(toast);
-
-            // Auto-dismiss after duration
-            if (duration > 0) {
-                setTimeout(() => {
-                    removeToast(id);
-                }, duration);
-            }
-
-            return id;
-        };
-
-        /**
-         * Remove a toast notification.
-         * @param {number} id - Toast ID to remove
-         */
-        const removeToast = (id) => {
-            const index = toasts.value.findIndex(t => t.id === id);
-            if (index !== -1) {
-                toasts.value.splice(index, 1);
-            }
-        };
-
-        // Custom confirm dialog
-        const confirmDialog = ref({
-            show: false,
-            title: '',
-            message: '',
-            confirmText: 'Confirm',
-            cancelText: 'Cancel',
-            type: 'danger', // 'danger' | 'info'
-            _resolve: null
-        });
-
-        // Debug: Expose a global method to reset the dialog
+        // Debug: Expose global methods for modal troubleshooting
         window.resetConfirmDialog = () => {
             console.log('[Debug] Resetting confirmDialog');
-            confirmDialog.value.show = false;
+            confirmDialog.value = false;
         };
-
-        // Debug: Diagnose modal states
         window.diagnoseModals = () => {
             console.log('=== Modal States ===');
             console.log('confirmDialog.show:', confirmDialog.value.show);
@@ -169,8 +263,6 @@ createApp({
             console.log('warnings:', warnings.value);
             console.log('==================');
         };
-
-        // Reset all modals (emergency fix)
         window.resetAllModals = () => {
             console.log('[Debug] Resetting all modals');
             confirmDialog.value.show = false;
@@ -182,657 +274,425 @@ createApp({
             warnings.value = [];
         };
 
-        /**
-         * Show a custom confirm dialog.
-         * @param {Object} options - Dialog options
-         * @returns {Promise<boolean>} - True if confirmed, false if cancelled
-         */
-        const showConfirm = (options) => {
-            return new Promise((resolve) => {
-                console.log('[Debug] showConfirm called with:', options);
-                confirmDialog.value = {
-                    show: true,
-                    title: options.title || 'Confirm',
-                    message: options.message || '',
-                    confirmText: options.confirmText || 'Confirm',
-                    cancelText: options.cancelText || 'Cancel',
-                    type: options.type || 'info',
-                    _resolve: resolve
-                };
-                console.log('[Debug] confirmDialog.value.show:', confirmDialog.value.show);
-            });
-        };
-
-        const handleConfirmOk = () => {
-            if (confirmDialog.value._resolve) {
-                confirmDialog.value._resolve(true);
-            }
-            confirmDialog.value.show = false;
-        };
-
-        const handleConfirmCancel = () => {
-            if (confirmDialog.value._resolve) {
-                confirmDialog.value._resolve(false);
-            }
-            confirmDialog.value.show = false;
-        };
-
-        const toastIcon = (type) => {
-            const icons = {
-                success: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>',
-                error: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>',
-                warning: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>',
-                info: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>'
-            };
-            return icons[type] || icons.info;
-        };
-
-        const toastClasses = (type) => {
-            const baseClasses = 'pointer-events-auto shadow-lg rounded-lg px-4 py-3 flex items-center gap-3 min-w-[300px] max-w-md transition-all';
-            const typeClasses = {
-                success: 'bg-green-50 border-l-4 border-green-500 text-green-800',
-                error: 'bg-red-50 border-l-4 border-red-500 text-red-800',
-                warning: 'bg-yellow-50 border-l-4 border-yellow-500 text-yellow-800',
-                info: 'bg-blue-50 border-l-4 border-blue-500 text-blue-800'
-            };
-            return `${baseClasses} ${typeClasses[type] || typeClasses.info}`;
-        };
-
-        // AbortController for canceling requests on page unload
-        let abortController = new AbortController();
-        let pollTimeoutId = null;
-        let healthCheckIntervalId = null;
+        // ========================================================================
+        // PLAYER LOGIC - YouTube and ArtPlayer initialization
+        // ========================================================================
 
         /**
-         * Resolve the backend base URL and initialize the API client.
+         * Initialize YouTube player.
+         * @param {string} videoId
          */
-        const resolveApiBaseUrl = () => {
-            let baseUrl = 'http://localhost:8000';
-
-            // Codespaces & Remote Environment Handling
-            console.log('[Debug] Current Hostname:', window.location.hostname);
-
-            if (window.location.hostname.includes('github.dev') || window.location.hostname.includes('gitpod.io')) {
-                // GitHub Codespaces: port 8080 is usually the frontend, backend on 8000
-                const currentHost = window.location.hostname;
-                console.log('[Debug] Detected Codespace/Gitpod environment');
-
-                // Attempt to replace ANY port number in the hostname with -8000
-                // Regex looks for -<digits> followed by the domain suffix or end of string
-                // Typical format: name-8080.app.github.dev
-                const portRegex = /-([0-9]+)(?=\.app\.github\.dev|\.preview\.app\.github\.dev|\.gitpod\.io)/;
-                const match = currentHost.match(portRegex);
-
-                if (match) {
-                    const currentPort = match[1];
-                    console.log(`[Debug] Detected running on port: ${currentPort}`);
-                    baseUrl = `https://${currentHost.replace(`-${currentPort}`, '-8000')}`;
-                } else if (currentHost.includes('-8080')) {
-                    // Fallback for simple match
-                    baseUrl = `https://${currentHost.replace('-8080', '-8000')}`;
-                } else {
-                    console.warn('[Debug] Codespaces detected but port pattern not matched. Defaulting to localhost:8000. Host:', currentHost);
-                }
-            } else if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-                // Generic remote handling (e.g. LAN)
-                baseUrl = window.location.protocol + '//' + window.location.hostname + ':8000';
-            }
-
-            apiBaseUrl.value = baseUrl;
-            API.setBaseUrl(apiBaseUrl.value);
-            localStorage.removeItem('shadowpartner_api_url');
-            apiReady.value = true;
-        };
-
-        // Backend Health Check
-        /**
-         * Update backend health indicator only.
-         * @returns {Promise<void>}
-         */
-        const checkBackendHealth = async () => {
-            try {
-                console.log('Checking backend health at:', apiBaseUrl.value);
-                const response = await fetch(`${apiBaseUrl.value}/health`, {
-                    credentials: 'include'
-                });
-                if (response.ok) {
-                    const healthData = await response.json();
-                    backendStatus.value = {
-                        online: true,
-                        lastCheck: new Date(),
-                        details: healthData
-                    };
-                } else {
-                    throw new Error('Backend returned non-200');
-                }
-            } catch (e) {
-                console.error('Backend health check failed:', e);
-                backendStatus.value = { online: false, lastCheck: new Date(), details: null };
-            }
-        };
-
-        // Session Management
-        const getSessionId = () => {
-            return localStorage.getItem(SESSION_STORAGE_KEY);
-        };
-
-        const setSessionId = (id) => {
-            localStorage.setItem(SESSION_STORAGE_KEY, id);
-            sessionId.value = id;
-        };
-
-        const ensureSession = async (forceRefresh = false) => {
-            if (!forceRefresh) {
-                const existingSession = getSessionId();
-                if (existingSession) {
-                    sessionId.value = existingSession;
-                    return existingSession;
-                }
-            } else {
-                // Clear existing session before refreshing
-                clearSession();
-            }
-
-            const response = await fetch(`${apiBaseUrl.value}/api/session`, {
-                method: 'POST',
-                credentials: 'include'
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                setSessionId(data.session_id);
-                return data.session_id;
-            } else {
-                throw new Error('Failed to create session');
-            }
-        };
-
-        const clearSession = () => {
-            localStorage.removeItem(SESSION_STORAGE_KEY);
-            sessionId.value = null;
-        };
-
-        const handleSessionExpired = () => {
-            clearSession();
-            // Don't reload page - let the caller handle retry
-        };
-
-        const buildSessionHeaders = (sid) => {
-            const headers = {
-                [SESSION_HEADER_NAME]: sid
-            };
-            // Add admin session header if available
-            const adminSid = API.getAdminSessionId();
-            if (adminSid) {
-                headers[API.ADMIN_SESSION_HEADER_NAME] = adminSid;
-            }
-            return headers;
-        };
-
-        // Fetch with automatic session refresh on 401
-        const fetchWithAuth = async (url, options = {}, retryOnAuth = true) => {
-            const sid = await ensureSession();
-            const headers = { ...(options.headers || {}), ...buildSessionHeaders(sid) };
-            const response = await fetch(url, { ...options, headers, credentials: 'include' });
-
-            if (response.status === 401 && retryOnAuth) {
-                console.log('[Debug] Session expired, refreshing and retrying...');
-                await ensureSession(true);
-                return fetchWithAuth(url, options, false);
-            }
-            return response;
-        };
-
-        const buildAdminHeaders = () => {
-            if (!adminSession.value) {
-                return {};
-            }
-            return { [API.ADMIN_SESSION_HEADER_NAME]: adminSession.value };
-        };
-
-        const clearAdminState = () => {
-            API.clearAdminSession();
-            adminSession.value = null;
-            adminUsers.value = [];
-            adminAssets.value = [];
-            adminSubtitleTracks.value = [];
-            adminPlaylists.value = [];
-            adminActivePlaylist.value = null;
-            adminPlaylistItems.value = [];
-            adminPlaylistView.value = 'list';
-            adminPlaylistModalOpen.value = false;
-            adminPlaylistForm.value = { id: null, title: '', description: '', cover_image: '' };
-            adminPlaylistSaving.value = false;
-            adminPlaylistSearchOpen.value = false;
-            adminPlaylistSearchQuery.value = '';
-            adminPlaylistSearchResults.value = [];
-            adminPlaylistSearchLoading.value = false;
-            adminShowDeleteModal.value = false;
-            adminDeleteTarget.value = { type: '', id: '', identifier: '' };
-            adminShowEditModal.value = false;
-            adminEditForm.value = { assetId: '', title: '', description: '' };
-        };
-
-        const adminFormatDate = (dateString) => {
-            const date = new Date(dateString);
-            return date.toLocaleString('zh-CN', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-        };
-
-        const adminHandleLogin = async () => {
-            adminLoading.value = true;
-            adminError.value = null;
-
-            try {
-                const response = await fetch(`${apiBaseUrl.value}/api/admin/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(adminLoginForm.value)
-                });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    API.setAdminSessionId(data.session_id);
-                    adminSession.value = data.session_id;
-                    adminLoginForm.value = { username: '', password: '' };
-                    await adminLoadData();
-                } else {
-                    const errorData = await response.json();
-                    adminError.value = errorData.detail || 'Login failed';
-                }
-            } catch (e) {
-                console.error('Admin login error:', e);
-                adminError.value = e.message || 'Login failed';
-            } finally {
-                adminLoading.value = false;
-            }
-        };
-
-        const adminHandleLogout = async () => {
-            try {
-                if (adminSession.value) {
-                    await fetch(`${apiBaseUrl.value}/api/admin/logout`, {
-                        method: 'POST',
-                        headers: buildAdminHeaders()
-                    });
-                }
-            } catch (e) {
-                console.error('Admin logout error:', e);
-            } finally {
-                clearAdminState();
-                adminError.value = null;
-            }
-        };
-
-        const adminLoadData = async (markReady = false) => {
-            if (!adminSession.value) {
-                return;
-            }
-
-            adminLoading.value = true;
-            adminError.value = null;
-
-            try {
-                const headers = buildAdminHeaders();
-
-                if (adminActiveTab.value === 'users') {
-                    const response = await fetch(`${apiBaseUrl.value}/api/admin/users`, { headers });
-                    if (response.ok) {
-                        adminUsers.value = await response.json();
-                    } else if (response.status === 401) {
-                        clearAdminState();
-                    }
-                } else if (adminActiveTab.value === 'assets') {
-                    const response = await fetch(`${apiBaseUrl.value}/api/admin/assets`, { headers });
-                    if (response.ok) {
-                        adminAssets.value = await response.json();
-                    } else if (response.status === 401) {
-                        clearAdminState();
-                    }
-                } else if (adminActiveTab.value === 'subtitle-tracks') {
-                    const response = await fetch(`${apiBaseUrl.value}/api/admin/subtitle-tracks`, { headers });
-                    if (response.ok) {
-                        adminSubtitleTracks.value = await response.json();
-                    } else if (response.status === 401) {
-                        clearAdminState();
-                    }
-                } else if (adminActiveTab.value === 'playlists') {
-                    const response = await fetch(`${apiBaseUrl.value}/api/playlists`, { headers });
-                    if (response.ok) {
-                        const data = await response.json();
-                        adminPlaylists.value = data.items || [];
-                    } else if (response.status === 401) {
-                        clearAdminState();
-                    }
-                }
-            } catch (e) {
-                console.error('Admin load data error:', e);
-                adminError.value = e.message || 'Failed to load data';
-            } finally {
-                adminLoading.value = false;
-                if (markReady) {
-                    routeReady.value = true;
-                }
-            }
-        };
-
-        const adminConfirmDelete = (type, id, identifier) => {
-            adminDeleteTarget.value = { type, id, identifier };
-            adminShowDeleteModal.value = true;
-        };
-
-        const adminExecuteDelete = async () => {
-            adminDeleting.value = true;
-
-            try {
-                const { type, id } = adminDeleteTarget.value;
-                let endpoint = null;
-
-                if (type === 'user') {
-                    endpoint = `/api/admin/users/${id}`;
-                } else if (type === 'asset') {
-                    endpoint = `/api/admin/assets/${id}`;
-                } else if (type === 'subtitle-track') {
-                    endpoint = `/api/admin/subtitle-tracks/${id}`;
-                } else if (type === 'playlist') {
-                    endpoint = `/api/playlists/${id}`;
-                }
-
-                const response = await fetch(`${apiBaseUrl.value}${endpoint}`, {
-                    method: 'DELETE',
-                    headers: buildAdminHeaders()
-                });
-
-                if (response.ok) {
-                    if (type === 'user') {
-                        adminUsers.value = adminUsers.value.filter(u => u.id !== id);
-                    } else if (type === 'asset') {
-                        adminAssets.value = adminAssets.value.filter(a => a.id !== id);
-                    } else if (type === 'subtitle-track') {
-                        adminSubtitleTracks.value = adminSubtitleTracks.value.filter(t => t.id !== id);
-                    } else if (type === 'playlist') {
-                        adminPlaylists.value = adminPlaylists.value.filter(p => p.id !== id);
-                        if (adminActivePlaylist.value && adminActivePlaylist.value.id === id) {
-                            adminActivePlaylist.value = null;
-                            adminPlaylistItems.value = [];
-                            adminPlaylistView.value = 'list';
-                        }
-                    }
-                    adminShowDeleteModal.value = false;
-                } else if (response.status === 401) {
-                    clearAdminState();
-                } else {
-                    const errorData = await response.json();
-                    showToast(errorData.detail || 'Delete failed', 'error');
-                }
-            } catch (e) {
-                console.error('Admin delete error:', e);
-                showToast(e.message || 'Delete failed', 'error');
-            } finally {
-                adminDeleting.value = false;
-            }
-        };
-
-        const adminOpenPlayPage = (asset) => {
-            Router.goToPlay(asset.id);
-        };
-
-        const adminGoToUpload = () => {
-            Router.goToUpload();
-        };
-
-        const adminOpenEditModal = async (asset) => {
-            adminEditForm.value = {
-                assetId: asset.id,
-                title: '',
-                description: ''
-            };
-            adminShowEditModal.value = true;
-
-            try {
-                const data = await API.getAssetMeta(asset.id);
-                adminEditForm.value.title = data.title || '';
-                adminEditForm.value.description = data.description || '';
-            } catch (e) {
-                console.error('Failed to fetch asset meta:', e);
-            }
-        };
-
-        const adminSaveAssetMeta = async () => {
-            adminEditSaving.value = true;
-            try {
-                await API.updateAssetMeta(adminEditForm.value.assetId, {
-                    title: adminEditForm.value.title,
-                    description: adminEditForm.value.description
-                });
-                adminShowEditModal.value = false;
-                await adminLoadData();
-            } catch (e) {
-                console.error('Admin save error:', e);
-                showToast(e.message || 'Failed to save', 'error');
-            } finally {
-                adminEditSaving.value = false;
-            }
-        };
-
-        const adminOpenPlaylistModal = (playlist = null) => {
-            if (playlist) {
-                adminPlaylistForm.value = {
-                    id: playlist.id,
-                    title: playlist.title || '',
-                    description: playlist.description || '',
-                    cover_image: playlist.cover_image || ''
-                };
-            } else {
-                adminPlaylistForm.value = { id: null, title: '', description: '', cover_image: '' };
-            }
-            adminPlaylistModalOpen.value = true;
-        };
-
-        const adminSavePlaylist = async () => {
-            adminPlaylistSaving.value = true;
-            try {
-                const payload = {
-                    title: adminPlaylistForm.value.title,
-                    description: adminPlaylistForm.value.description || null,
-                    cover_image: adminPlaylistForm.value.cover_image || null
-                };
-                if (adminPlaylistForm.value.id) {
-                    await API.updatePlaylist(adminPlaylistForm.value.id, payload);
-                } else {
-                    await API.createPlaylist(payload);
-                }
-                adminPlaylistModalOpen.value = false;
-                await adminLoadData();
-            } catch (e) {
-                console.error('Admin playlist save error:', e);
-                showToast(e.message || 'Failed to save', 'error');
-            } finally {
-                adminPlaylistSaving.value = false;
-            }
-        };
-
-        const adminOpenPlaylistDetail = async (playlist) => {
-            adminActivePlaylist.value = playlist;
-            adminPlaylistView.value = 'detail';
-            await adminLoadPlaylistItems(playlist.id);
-        };
-
-        const adminOpenPlaylistPlay = async (playlist) => {
-            if (!playlist || !playlist.id) {
-                return;
-            }
-            if (!playlist.item_count) {
-                showToast('Playlist is empty', 'warning');
-                return;
-            }
-            try {
-                const data = await API.getPlaylistItems(playlist.id);
-                const firstItem = data.items?.[0];
-                if (!firstItem) {
-                    showToast('Playlist is empty', 'warning');
+        const initPlayer = (videoId) => {
+            // Check if we can reuse existing YouTube player
+            if (player.value && typeof player.value.loadVideoById === 'function') {
+                const iframe = player.value.getIframe?.();
+                if (iframe && iframe.parentNode) {
+                    console.log('[Debug] Reusing existing YouTube player for video:', videoId);
+                    player.value.loadVideoById(videoId);
                     return;
                 }
-                Router.goToPlay(firstItem.asset_id, { playlistId: playlist.id });
-            } catch (e) {
-                console.error('Failed to open playlist play page:', e);
-                showToast(e.message || 'Failed to open', 'error');
+                if (typeof player.value.destroy === 'function') {
+                    player.value.destroy();
+                }
+                player.value = null;
+            }
+
+            if (player.value) {
+                if (typeof player.value.destroy === 'function') {
+                    player.value.destroy();
+                }
+                player.value = null;
+                document.getElementById('youtube-player').innerHTML = '';
+            }
+
+            const container = document.getElementById('youtube-player');
+            if (container) {
+                container.style.height = '';
+            }
+
+            if (!window.YT) {
+                const tag = document.createElement('script');
+                tag.src = "https://www.youtube.com/iframe_api";
+                const firstScriptTag = document.getElementsByTagName('script')[0];
+                firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+                window.onYouTubeIframeAPIReady = () => createPlayer(videoId);
+            } else {
+                createPlayer(videoId);
             }
         };
 
-        const adminLoadPlaylistItems = async (playlistId) => {
-            try {
-                const data = await API.getPlaylistItems(playlistId);
-                adminPlaylistItems.value = data.items || [];
-            } catch (e) {
-                console.error('Failed to load playlist items:', e);
-                showToast(e.message || 'Failed to load', 'error');
-            }
-        };
-
-        const adminBackToPlaylists = () => {
-            adminActivePlaylist.value = null;
-            adminPlaylistItems.value = [];
-            adminPlaylistView.value = 'list';
-        };
-
-        const adminOpenPlaylistSearch = () => {
-            adminPlaylistSearchOpen.value = true;
-            adminPlaylistSearchQuery.value = '';
-            adminPlaylistSearchResults.value = [];
-        };
-
-        const adminSearchPlaylistAssets = async () => {
-            adminPlaylistSearchLoading.value = true;
-            try {
-                const data = await API.searchAssets(adminPlaylistSearchQuery.value || '');
-                adminPlaylistSearchResults.value = data.items || [];
-            } catch (e) {
-                console.error('Playlist search failed:', e);
-                showToast(e.message || 'Search failed', 'error');
-            } finally {
-                adminPlaylistSearchLoading.value = false;
-            }
-        };
-
-        const adminAddPlaylistAsset = async (asset) => {
-            if (!adminActivePlaylist.value) {
-                return;
-            }
-            try {
-                await API.addPlaylistItem(adminActivePlaylist.value.id, {
-                    asset_id: asset.id
-                });
-                await adminLoadPlaylistItems(adminActivePlaylist.value.id);
-                adminPlaylistSearchOpen.value = false;
-            } catch (e) {
-                console.error('Failed to add playlist item:', e);
-                showToast(e.message || 'Failed to add', 'error');
-            }
-        };
-
-        const adminMovePlaylistItem = async (item, direction) => {
-            if (!adminActivePlaylist.value) {
-                return;
-            }
-            const newPosition = item.position + direction;
-            if (newPosition < 0 || newPosition >= adminPlaylistItems.value.length) {
-                return;
-            }
-            try {
-                await API.updatePlaylistItemPosition(
-                    adminActivePlaylist.value.id,
-                    item.asset_id,
-                    newPosition
-                );
-                await adminLoadPlaylistItems(adminActivePlaylist.value.id);
-            } catch (e) {
-                console.error('Failed to move playlist item:', e);
-                showToast(e.message || 'Failed to reorder', 'error');
-            }
-        };
-
-        const adminRemovePlaylistItem = async (item) => {
-            if (!adminActivePlaylist.value) {
-                return;
-            }
-            const confirmRemove = await showConfirm({
-                title: 'Remove Item',
-                message: `Remove "${item.cached_title}" from this playlist?`,
-                confirmText: 'Remove',
-                cancelText: 'Cancel',
-                type: 'danger'
+        const createPlayer = (videoId) => {
+            player.value = new YT.Player('youtube-player', {
+                height: '100%',
+                width: '100%',
+                videoId: videoId,
+                playerVars: { 'playsinline': 1 },
+                events: {
+                    'onReady': onPlayerReady,
+                    'onStateChange': onPlayerStateChange
+                }
             });
-            if (!confirmRemove) {
-                return;
-            }
-            try {
-                await API.removePlaylistItem(adminActivePlaylist.value.id, item.asset_id);
-                await adminLoadPlaylistItems(adminActivePlaylist.value.id);
-            } catch (e) {
-                console.error('Failed to remove playlist item:', e);
-                showToast(e.message || 'Failed to remove', 'error');
-            }
         };
 
-        // Cleanup function
         /**
-         * Cleanup timers and abort in-flight requests.
+         * Initialize ArtPlayer for file playback.
+         * @param {File} file
          */
-        const cleanup = () => {
-            abortController.abort();
-            if (healthCheckIntervalId) clearInterval(healthCheckIntervalId);
-            if (pollTimeoutId) clearTimeout(pollTimeoutId);
-            if (window._pollInterval) clearInterval(window._pollInterval);
-        };
-
-        // Route handlers
-        /**
-         * Load assets for home page grid.
-         * @param {boolean} append - If true, append to existing list (infinite scroll)
-         */
-        const loadHomeAssets = async (append = false, markReady = false) => {
-            if (homeLoading.value) {
-                if (markReady) {
-                    routeReady.value = true;
+        const initFilePlayer = (file) => {
+            if (player.value) {
+                if (typeof player.value.destroy === 'function') {
+                    player.value.destroy();
                 }
+                player.value = null;
+            }
+
+            const container = document.getElementById('youtube-player');
+            if (!container) {
+                console.error("Player container not found");
                 return;
             }
-            homeLoading.value = true;
-            try {
-                const offset = append ? homeAssets.value.length : 0;
-                const data = await API.getAssets(HOME_PAGE_SIZE, offset);
-                if (append) {
-                    homeAssets.value = [...homeAssets.value, ...data.items];
+
+            container.innerHTML = '';
+            container.className = "w-full";
+
+            const artContainer = document.createElement('div');
+            artContainer.className = 'artplayer-app';
+            artContainer.style.width = '100%';
+            container.appendChild(artContainer);
+
+            const fileUrl = URL.createObjectURL(file);
+
+            const art = new Artplayer({
+                container: artContainer,
+                url: fileUrl,
+                volume: 0.5,
+                setting: true,
+                playbackRate: true,
+                aspectRatio: true,
+                fullscreen: true,
+                fullscreenWeb: true,
+                pip: true,
+                autoSize: false,
+                autoMini: true,
+                theme: '#3B82F6',
+                lang: 'zh-cn',
+            });
+
+            // Auto-resize container based on video aspect ratio
+            art.on('video:loadedmetadata', () => {
+                const video = art.video;
+                const containerWidth = container.clientWidth;
+
+                if (video.videoWidth === 0 || video.videoHeight === 0) {
+                    // Audio-only: compact 60px height
+                    artContainer.classList.add('artplayer-audio-only');
+                    container.style.height = '60px';
+                    container.style.minHeight = '60px';
+                    container.style.maxHeight = '60px';
+                    artContainer.style.height = '60px';
+                    artContainer.style.minHeight = '60px';
+                    artContainer.style.maxHeight = '60px';
+
+                    if (art.template.$layer) {
+                        art.template.$layer.style.display = 'none';
+                    }
+                    if (art.template.$mask) {
+                        art.template.$mask.style.display = 'none';
+                    }
+                    console.log('[ArtPlayer] Audio-only mode, using compact controls');
                 } else {
-                    homeAssets.value = data.items;
+                    // Video: use 16:9 aspect ratio
+                    const newHeight = containerWidth / (16 / 9);
+                    artContainer.classList.remove('artplayer-audio-only');
+                    container.style.height = `${newHeight}px`;
+                    container.style.minHeight = '';
+                    container.style.maxHeight = '';
+                    artContainer.style.height = `${newHeight}px`;
+                    artContainer.style.minHeight = '';
+                    artContainer.style.maxHeight = '';
+
+                    if (art.template.$layer) {
+                        art.template.$layer.style.display = '';
+                    }
+                    if (art.template.$mask) {
+                        art.template.$mask.style.display = '';
+                    }
+                    console.log('[ArtPlayer] Video mode, using 16:9 aspect ratio:', containerWidth, 'x', newHeight);
                 }
-                homeHasMore.value = homeAssets.value.length < data.total;
-            } catch (e) {
-                console.error('[Home] Failed to load assets:', e);
-            } finally {
-                homeLoading.value = false;
-                if (markReady) {
-                    routeReady.value = true;
+            });
+
+            art.on('video:timeupdate', () => {
+                const time = art.currentTime;
+                if (Math.abs(time - currentTime.value) > 0.1) {
+                    currentTime.value = time;
+                    updateActiveWords();
                 }
-            }
+            });
+
+            player.value = {
+                getCurrentTime: () => art.currentTime,
+                seekTo: (time, allowSeekAhead) => { art.seek = time; },
+                playVideo: () => art.play(),
+                pauseVideo: () => art.pause(),
+                destroy: () => art.destroy(),
+                artInstance: art,
+                isNative: true
+            };
+
+            console.log('[ArtPlayer] Initialized with volume:', art.volume);
+            startPolling();
+        };
+
+        const startPolling = () => {
+            if (window._pollInterval) clearInterval(window._pollInterval);
+
+            window._pollInterval = setInterval(() => {
+                if (player.value && player.value.getCurrentTime) {
+                    const time = player.value.getCurrentTime();
+                    if (Math.abs(time - currentTime.value) > 0.1) {
+                        currentTime.value = time;
+                        updateActiveWords();
+                    }
+
+                    if (dictation.active && dictation.isPlaying) {
+                        const segment = videoData.value?.segments?.[dictation.segmentIndex];
+                        if (segment && time >= segment.end) {
+                            player.value.seekTo(Math.max(0, segment.start - 0.3), true);
+                            player.value.playVideo();
+                        }
+                    }
+                }
+            }, 100);
+        };
+
+        const onPlayerReady = (event) => {
+            event.target.setVolume(50);
+            startPolling();
+        };
+
+        const onPlayerStateChange = (event) => {
+            // Can handle play/pause states here
         };
 
         /**
-         * Load asset data for the play page and initialize the player.
-         * @param {string} assetId
-         * @returns {Promise<void>}
+         * Update active subtitle segment based on current playback time.
          */
+        const updateActiveWords = () => {
+            const data = currentRoute.value === 'play' ? playPageData.value : videoData.value;
+            if (!data) return;
+
+            const segments = data.segments;
+            let foundSegment = -1;
+
+            for (let i = segments.length - 1; i >= 0; i--) {
+                const seg = segments[i];
+                if (currentTime.value >= seg.start) {
+                    foundSegment = i;
+                    break;
+                }
+            }
+
+            if (foundSegment !== -1 && foundSegment !== currentSegmentIndex.value) {
+                currentSegmentIndex.value = foundSegment;
+            }
+        };
+
+        // ========================================================================
+        // COMPUTED PROPERTIES
+        // ========================================================================
+
+        const hasWordTimestamps = computed(() => {
+            return videoData.value?.has_word_timestamps !== false;
+        });
+
+        const currentHasWordTimestamps = computed(() => {
+            if (currentRoute.value === 'play') {
+                return playPageData.value?.has_word_timestamps !== false;
+            }
+            return videoData.value?.has_word_timestamps !== false;
+        });
+
+        const isWordActive = (word, segment) => {
+            if (!currentHasWordTimestamps.value && segment) {
+                return currentTime.value >= segment.start && currentTime.value < segment.end;
+            }
+            return currentTime.value >= word.start && currentTime.value < word.end;
+        };
+
+        const visibleSegments = computed(() => {
+            if (!videoData.value || !videoData.value.segments) return [];
+
+            const segments = videoData.value.segments;
+            const current = currentSegmentIndex.value;
+            const range = contextRange.value;
+            const centerIndex = current === -1 ? 0 : current;
+            const start = Math.max(0, centerIndex - range);
+            const end = Math.min(segments.length, centerIndex + range + 1);
+
+            return segments.slice(start, end).map((seg, index) => ({
+                ...seg,
+                originalIndex: start + index
+            }));
+        });
+
+        const playPageVisibleSegments = computed(() => {
+            if (!playPageData.value || !playPageData.value.segments) return [];
+
+            const segments = playPageData.value.segments;
+            const current = currentSegmentIndex.value;
+            const range = contextRange.value;
+            const centerIndex = current === -1 ? 0 : current;
+            const start = Math.max(0, centerIndex - range);
+            const end = Math.min(segments.length, centerIndex + range + 1);
+
+            return segments.slice(start, end).map((seg, index) => ({
+                ...seg,
+                originalIndex: start + index
+            }));
+        });
+
+        const playPageHasWordTimestamps = computed(() => {
+            return playPageData.value?.has_word_timestamps !== false;
+        });
+
+        const dictationProgress = computed(() => {
+            const data = currentRoute.value === 'play' ? playPageData.value : videoData.value;
+            if (!data?.segments?.length) return 0;
+            return Math.round((dictation.segmentIndex / data.segments.length) * 100);
+        });
+
+        const currentDictationText = computed(() => {
+            const data = currentRoute.value === 'play' ? playPageData.value : videoData.value;
+            return getCurrentDictationText(data);
+        });
+
+        const backButtonLabel = computed(() => {
+            switch (navigationContext.source) {
+                case 'playlist':
+                    return '返回播放列表';
+                case 'home':
+                    return '返回首页';
+                case 'admin':
+                    return '返回管理';
+                case 'upload':
+                    return '返回上传';
+                default:
+                    return '返回首页';
+            }
+        });
+
+        const breadcrumbItems = computed(() => {
+            const items = [];
+
+            switch (navigationContext.source) {
+                case 'admin':
+                    items.push({ label: '管理', action: () => Router.goToAdmin() });
+                    break;
+                case 'upload':
+                    items.push({ label: '上传', action: () => Router.goToUpload() });
+                    break;
+                default:
+                    items.push({ label: '首页', action: () => Router.goHome() });
+                    break;
+            }
+
+            if (navigationContext.playlistTitle && (navigationContext.source === 'home' || navigationContext.source === 'playlist' || navigationContext.source === 'direct')) {
+                items.push({
+                    label: navigationContext.playlistTitle,
+                    action: () => Router.goHome()
+                });
+            }
+
+            if (playPageData.value) {
+                items.push({ label: playPageData.value.title, action: null });
+            }
+
+            return items;
+        });
+
+        // ========================================================================
+        // DICTATION HELPERS
+        // ========================================================================
+
+        const getCurrentVideoData = () => {
+            return currentRoute.value === 'play' ? playPageData.value : videoData.value;
+        };
+
+        const playCurrentSegment = () => {
+            const segment = getCurrentSegment(getCurrentVideoData());
+            if (!segment) return;
+
+            const startTime = Math.max(0, segment.start - 0.3);
+
+            if (currentRoute.value === 'play') {
+                PlayerManager.seekTo(startTime);
+                PlayerManager.play();
+            } else if (player.value) {
+                player.value.seekTo(startTime, true);
+                player.value.playVideo();
+            }
+            dictation.isPlaying = true;
+        };
+
+        const stopDictationPlayback = () => {
+            if (currentRoute.value === 'play') {
+                PlayerManager.pause();
+            } else if (player.value) {
+                player.value.pauseVideo();
+            }
+            dictation.isPlaying = false;
+        };
+
+        const handleDictationEnterLocal = (event) => {
+            handleDictationEnter(getCurrentVideoData());
+        };
+
+        const handleDictationMainActionLocal = () => {
+            handleDictationMainAction(getCurrentVideoData());
+        };
+
+        const gotoPrevSegmentLocal = () => {
+            gotoPrevSegment();
+        };
+
+        const gotoNextSegmentLocal = () => {
+            gotoNextSegment(getCurrentVideoData());
+        };
+
+        const skipCurrentSegmentLocal = () => {
+            skipCurrentSegment(getCurrentVideoData());
+        };
+
+        const toggleDictationPlaybackLocal = () => {
+            toggleDictationPlayback(playCurrentSegment, stopDictationPlayback);
+        };
+
+        // ========================================================================
+        // PLAYER HELPERS
+        // ========================================================================
+
+        const seekTo = (time) => {
+            if (currentRoute.value === 'play') {
+                PlayerManager.seekTo(time);
+                PlayerManager.play();
+            } else if (player.value) {
+                player.value.seekTo(time, true);
+                if (player.value.playVideo) player.value.playVideo();
+            }
+        };
+
+        // ========================================================================
+        // ROUTING & NAVIGATION
+        // ========================================================================
+
+        const navigateBack = () => {
+            Router.goBackToPrevious() || Router.goHome();
+        };
+
         const loadPlaylistContext = async (playlistId, assetId) => {
             playlistContextLoading.value = true;
             try {
                 playlistContext.value = await API.getPlaylistContext(playlistId, assetId);
-                // Update navigation context with playlist title for breadcrumb
                 if (playlistContext.value) {
                     navigationContext.playlistTitle = playlistContext.value.playlist_title;
                 }
@@ -845,12 +705,6 @@ createApp({
             }
         };
 
-        /**
-         * Load asset data for the play page and initialize the player.
-         * @param {string} assetId
-         * @param {string|null} playlistId
-         * @returns {Promise<void>}
-         */
         const loadPlayPage = async (assetId, playlistId = null) => {
             console.log('[Router] Loading play page for asset:', assetId);
             playPageLoading.value = true;
@@ -860,11 +714,7 @@ createApp({
             playlistContextLoading.value = false;
             routeReady.value = true;
 
-            // Reset dictation and playback state when loading new asset
-            dictation.segmentIndex = 0;
-            dictation.mode = 'listen';
-            dictation.userInput = '';
-            dictation.isPlaying = false;
+            resetDictationState();
             currentTime.value = 0;
             currentSegmentIndex.value = -1;
 
@@ -875,9 +725,8 @@ createApp({
                 const data = await API.getAsset(assetId);
                 console.log('[loadPlayPage] Asset data loaded:', data);
                 playPageData.value = data;
-                playPageLoading.value = false; // Set before nextTick so DOM renders
+                playPageLoading.value = false;
 
-                // Initialize player after DOM update
                 nextTick(() => {
                     console.log('[loadPlayPage] nextTick callback executing');
                     const container = document.getElementById('youtube-player');
@@ -891,7 +740,6 @@ createApp({
                         currentTime.value = time;
                         updateActiveWords();
 
-                        // Handle dictation loop
                         if (dictation.active && dictation.isPlaying) {
                             const segment = playPageData.value?.segments?.[dictation.segmentIndex];
                             if (segment && time >= segment.end) {
@@ -909,7 +757,6 @@ createApp({
                         const streamUrl = API.getStreamUrl(assetId);
                         console.log('[loadPlayPage] Asset type:', data.type);
                         console.log('[loadPlayPage] Stream URL:', streamUrl);
-                        console.log('[loadPlayPage] Container:', container);
                         PlayerManager.initArtPlayer(streamUrl, container, {
                             onTimeUpdate: onTimeUpdate
                         });
@@ -940,973 +787,47 @@ createApp({
         const handleRouteChange = (route, params) => {
             currentRoute.value = route;
 
-            // Sync navigation context from router
             const routerContext = Router.getNavigationContext();
             navigationContext.source = routerContext.source;
             navigationContext.playlistId = routerContext.playlistId;
             navigationContext.canGoBack = routerContext.canGoBack;
 
-            // Cleanup previous state
             PlayerManager.destroy();
             routeReady.value = false;
 
             if (route === 'play' && params.assetId) {
                 loadPlayPage(params.assetId, params.playlistId || null);
             } else if (route === 'upload') {
-                // Reset play page state when going to upload
                 playPageData.value = null;
                 playPageError.value = null;
                 playlistContext.value = null;
                 playlistContextLoading.value = false;
                 routeReady.value = true;
             } else if (route === 'admin') {
-                // Reset play page state when going to admin
                 playPageData.value = null;
                 playPageError.value = null;
                 playlistContext.value = null;
                 playlistContextLoading.value = false;
                 if (adminSession.value) {
-                    adminLoadData(true);
-                } else {
-                    routeReady.value = true;
+                    adminLoadData();
                 }
+                routeReady.value = true;
             } else if (route === 'home') {
-                // Load home page assets
                 playPageData.value = null;
                 playPageError.value = null;
                 playlistContext.value = null;
                 playlistContextLoading.value = false;
-                loadHomeAssets(false, true);
+                loadHomeAssets(false);
+                routeReady.value = true;
             } else {
                 routeReady.value = true;
             }
         };
 
-        watch(adminActiveTab, () => {
-            if (adminSession.value && currentRoute.value === 'admin') {
-                adminLoadData();
-            }
-            if (adminActiveTab.value !== 'playlists') {
-                adminActivePlaylist.value = null;
-                adminPlaylistItems.value = [];
-                adminPlaylistView.value = 'list';
-            }
-        });
+        // ========================================================================
+        // ADMIN UPLOAD EDIT MODAL
+        // ========================================================================
 
-        const initApp = () => {
-            resolveApiBaseUrl();
-
-            // Initialize router after base URL is ready.
-            Router.onRouteChange = handleRouteChange;
-            Router.init();
-
-            // Cleanup on page refresh/close
-            window.addEventListener('beforeunload', cleanup);
-
-            // Health check runs in background (non-blocking)
-            checkBackendHealth();
-            // Poll every 30 seconds
-            healthCheckIntervalId = setInterval(checkBackendHealth, 30000);
-        };
-
-        // Start checking on mount
-        onMounted(() => {
-            initApp();
-        });
-
-        // Cleanup on unmount
-        onUnmounted(() => {
-            cleanup();
-            window.removeEventListener('beforeunload', cleanup);
-        });
-
-        // YouTube Player API
-        const initPlayer = (videoId) => {
-            // Check if we can reuse existing YouTube player
-            if (player.value && typeof player.value.loadVideoById === 'function') {
-                // Verify the player is still attached to DOM
-                const iframe = player.value.getIframe?.();
-                if (iframe && iframe.parentNode) {
-                    console.log('[Debug] Reusing existing YouTube player for video:', videoId);
-                    player.value.loadVideoById(videoId);
-                    return;
-                }
-                // Player exists but not in DOM, destroy it
-                console.log('[Debug] Player detached from DOM, recreating...');
-                if (typeof player.value.destroy === 'function') {
-                    player.value.destroy();
-                }
-                player.value = null;
-            }
-
-            // If we have an existing player (even audio), destroy it if switching modes
-            if (player.value) {
-                // If it's a YT player, destroy it properly
-                 if (typeof player.value.destroy === 'function') {
-                    player.value.destroy();
-                 }
-                 player.value = null;
-                 document.getElementById('youtube-player').innerHTML = '';
-            }
-
-            const container = document.getElementById('youtube-player');
-            if (container) {
-                container.style.height = '';
-            }
-
-            if (!window.YT) {
-                const tag = document.createElement('script');
-                tag.src = "https://www.youtube.com/iframe_api";
-                const firstScriptTag = document.getElementsByTagName('script')[0];
-                firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-
-                window.onYouTubeIframeAPIReady = () => createPlayer(videoId);
-            } else {
-                createPlayer(videoId);
-            }
-        };
-
-        const createPlayer = (videoId) => {
-            player.value = new YT.Player('youtube-player', {
-                height: '100%',
-                width: '100%',
-                videoId: videoId,
-                playerVars: {
-                    'playsinline': 1
-                },
-                events: {
-                    'onReady': onPlayerReady,
-                    'onStateChange': onPlayerStateChange
-                }
-            });
-        };
-
-        // File Audio/Video Player using ArtPlayer
-        const initFilePlayer = (file) => {
-            // Destroy existing player if it exists
-            if (player.value) {
-                if (typeof player.value.destroy === 'function') {
-                    player.value.destroy();
-                }
-                player.value = null;
-            }
-
-            // Clear container
-            const container = document.getElementById('youtube-player');
-            if (!container) {
-                console.error("Player container not found");
-                return;
-            }
-
-            container.innerHTML = '';
-            container.className = "w-full";
-
-            // Create a wrapper div for ArtPlayer
-            const artContainer = document.createElement('div');
-            artContainer.className = 'artplayer-app';
-            artContainer.style.width = '100%';
-            // Height will be auto-calculated by ArtPlayer based on video aspect ratio
-            container.appendChild(artContainer);
-
-            // Create object URL for the file
-            const fileUrl = URL.createObjectURL(file);
-
-            // Initialize ArtPlayer
-            const art = new Artplayer({
-                container: artContainer,
-                url: fileUrl,
-                volume: 0.5,
-                setting: true,
-                playbackRate: true,
-                aspectRatio: true,
-                fullscreen: true,
-                fullscreenWeb: true,
-                pip: true,
-                autoSize: false,
-                autoMini: true,
-                theme: '#3B82F6',
-                lang: 'zh-cn',
-            });
-
-            // Auto-resize container based on video aspect ratio
-            art.on('video:loadedmetadata', () => {
-                const video = art.video;
-                const containerWidth = container.clientWidth;
-
-                // Check if it's audio-only (no video dimensions)
-                if (video.videoWidth === 0 || video.videoHeight === 0) {
-                    // Audio-only: compact 60px height for controls only
-                    artContainer.classList.add('artplayer-audio-only');
-                    container.style.height = '60px';
-                    container.style.minHeight = '60px';
-                    container.style.maxHeight = '60px';
-                    artContainer.style.height = '60px';
-                    artContainer.style.minHeight = '60px';
-                    artContainer.style.maxHeight = '60px';
-
-                    // Hide center play button layer
-                    if (art.template.$layer) {
-                        art.template.$layer.style.display = 'none';
-                    }
-                    // Hide mask overlay
-                    if (art.template.$mask) {
-                        art.template.$mask.style.display = 'none';
-                    }
-
-                    console.log('[ArtPlayer] Audio-only mode, using compact controls');
-                } else {
-                    // Video: use 16:9 aspect ratio
-                    const newHeight = containerWidth / (16 / 9);
-                    artContainer.classList.remove('artplayer-audio-only');
-                    container.style.height = `${newHeight}px`;
-                    container.style.minHeight = '';
-                    container.style.maxHeight = '';
-                    artContainer.style.height = `${newHeight}px`;
-                    artContainer.style.minHeight = '';
-                    artContainer.style.maxHeight = '';
-
-                    // Show layer and mask for video
-                    if (art.template.$layer) {
-                        art.template.$layer.style.display = '';
-                    }
-                    if (art.template.$mask) {
-                        art.template.$mask.style.display = '';
-                    }
-
-                    console.log('[ArtPlayer] Video mode, using 16:9 aspect ratio:', containerWidth, 'x', newHeight);
-                }
-            });
-
-            // Listen for time updates
-            art.on('video:timeupdate', () => {
-                const time = art.currentTime;
-                if (Math.abs(time - currentTime.value) > 0.1) {
-                    currentTime.value = time;
-                    updateActiveWords();
-                }
-            });
-
-            // Wrap ArtPlayer into a consistent interface for our app logic
-            player.value = {
-                getCurrentTime: () => art.currentTime,
-                seekTo: (time, allowSeekAhead) => { art.seek = time; },
-                playVideo: () => art.play(),
-                pauseVideo: () => art.pause(),
-                destroy: () => art.destroy(),
-                artInstance: art,
-                isNative: true
-            };
-
-            console.log('[ArtPlayer] Initialized with volume:', art.volume);
-            startPolling();
-        };
-
-        const startPolling = () => {
-             if (window._pollInterval) clearInterval(window._pollInterval);
-
-             window._pollInterval = setInterval(() => {
-                if (player.value && player.value.getCurrentTime) {
-                    const time = player.value.getCurrentTime();
-                    if (Math.abs(time - currentTime.value) > 0.1) {
-                        currentTime.value = time;
-                        updateActiveWords();
-                    }
-                    
-                    if (dictation.active && dictation.isPlaying) {
-                        const segment = videoData.value?.segments?.[dictation.segmentIndex];
-                        if (segment && time >= segment.end) {
-                            player.value.seekTo(Math.max(0, segment.start - 0.3), true);
-                            player.value.playVideo();
-                        }
-                    }
-                }
-            }, 100);
-        };
-
-        const onPlayerReady = (event) => {
-            event.target.setVolume(50);
-            startPolling();
-        };
-
-        const onPlayerStateChange = (event) => {
-            // Can handle play/pause states here
-        };
-
-        /**
-         * Update active subtitle segment based on current playback time.
-         */
-        const updateActiveWords = () => {
-            // Use playPageData on play page, videoData on home page
-            const data = currentRoute.value === 'play' ? playPageData.value : videoData.value;
-            if (!data) return;
-
-            const segments = data.segments;
-            let foundSegment = -1;
-
-            // Search backwards to find the last matching segment, which is usually the correct one
-            for (let i = segments.length - 1; i >= 0; i--) {
-                const seg = segments[i];
-
-                const start = seg.start;
-                const end = seg.end;
-
-                if (currentTime.value >= start) {
-                    foundSegment = i;
-                    break;
-                }
-            }
-
-            if (foundSegment !== -1 && foundSegment !== currentSegmentIndex.value) {
-                currentSegmentIndex.value = foundSegment;
-            }
-        };
-
-        const scrollToSegment = (index) => {
-            // Deprecated: automatic view limiting handles visibility
-        };
-
-        // Check if we have precise word-level timestamps
-        const hasWordTimestamps = computed(() => {
-            return videoData.value?.has_word_timestamps !== false;
-        });
-
-        const currentHasWordTimestamps = computed(() => {
-            if (currentRoute.value === 'play') {
-                return playPageData.value?.has_word_timestamps !== false;
-            }
-            return videoData.value?.has_word_timestamps !== false;
-        });
-
-        const isWordActive = (word, segment) => {
-            // If we don't have word-level timestamps, highlight all words in the current segment
-            if (!currentHasWordTimestamps.value && segment) {
-                return currentTime.value >= segment.start && currentTime.value < segment.end;
-            }
-            // Otherwise, use precise word-level timing
-            return currentTime.value >= word.start && currentTime.value < word.end;
-        };
-
-        /**
-         * Seek playback to a specific time and start playback.
-         * @param {number} time
-         */
-        const seekTo = (time) => {
-            // Use PlayerManager on play page, player.value on home page
-            if (currentRoute.value === 'play') {
-                PlayerManager.seekTo(time);
-                PlayerManager.play();
-            } else if (player.value) {
-                player.value.seekTo(time, true);
-                if (player.value.playVideo) player.value.playVideo();
-            }
-        };
-
-        const dictationProgress = computed(() => {
-            if (!videoData.value?.segments?.length) return 0;
-            return Math.round((dictation.segmentIndex / videoData.value.segments.length) * 100);
-        });
-
-        const currentDictationText = computed(() => {
-            const segment = videoData.value?.segments?.[dictation.segmentIndex];
-            if (!segment?.words) return '';
-            return segment.words.map(w => w.text).join('');
-        });
-
-        const getCurrentSegment = () => {
-            // Use playPageData on play page, videoData on home page
-            const data = currentRoute.value === 'play' ? playPageData.value : videoData.value;
-            if (!data?.segments) return null;
-            return data.segments[dictation.segmentIndex];
-        };
-
-        const getSegmentText = (segment) => {
-            if (!segment?.words) return '';
-            return segment.words.map(w => w.text).join('');
-        };
-
-        /**
-         * Play the current dictation segment from a slight pre-roll.
-         */
-        const playCurrentSegment = () => {
-            const segment = getCurrentSegment();
-            if (!segment) return;
-
-            const startTime = Math.max(0, segment.start - 0.3);
-
-            // Use PlayerManager on play page, player.value on home page
-            if (currentRoute.value === 'play') {
-                PlayerManager.seekTo(startTime);
-                PlayerManager.play();
-            } else if (player.value) {
-                player.value.seekTo(startTime, true);
-                player.value.playVideo();
-            }
-            dictation.isPlaying = true;
-        };
-
-        /**
-         * Pause playback and stop dictation looping.
-         */
-        const stopDictationPlayback = () => {
-            // Use PlayerManager on play page, player.value on home page
-            if (currentRoute.value === 'play') {
-                PlayerManager.pause();
-            } else if (player.value) {
-                player.value.pauseVideo();
-            }
-            dictation.isPlaying = false;
-        };
-
-        /**
-         * Toggle dictation playback state.
-         */
-        const toggleDictationPlayback = () => {
-            if (dictation.isPlaying) {
-                stopDictationPlayback();
-            } else {
-                playCurrentSegment();
-            }
-        };
-
-        const gotoPrevSegment = () => {
-            if (dictation.segmentIndex > 0) {
-                dictation.segmentIndex--;
-                resetDictationInput();
-            }
-        };
-
-        const gotoNextSegment = () => {
-            // Use playPageData on play page, videoData on home page
-            const data = currentRoute.value === 'play' ? playPageData.value : videoData.value;
-            if (!data?.segments) return;
-            if (dictation.segmentIndex < data.segments.length - 1) {
-                dictation.segmentIndex++;
-                resetDictationInput();
-            }
-        };
-
-        const resetDictationInput = () => {
-            dictation.userInput = '';
-            dictation.mode = 'listen';
-            dictation.diffResult = [];
-            dictation.currentScore = null;
-        };
-
-        const normalizeJapanese = (str) => {
-            return str
-                .normalize('NFKC')
-                .replace(/[\s\u3000]/g, '')
-                .replace(/[。、！？「」『』（）・]/g, '');
-        };
-
-        const katakanaToHiragana = (str) => {
-            return str.replace(/[\u30A1-\u30F6]/g, (match) => {
-                return String.fromCharCode(match.charCodeAt(0) - 0x60);
-            });
-        };
-
-        const generateDiff = (correct, user) => {
-            const normCorrect = katakanaToHiragana(normalizeJapanese(correct));
-            const normUser = katakanaToHiragana(normalizeJapanese(user));
-            
-            const result = [];
-            let userIdx = 0;
-            
-            for (const char of correct) {
-                const normChar = katakanaToHiragana(normalizeJapanese(char));
-                if (!normChar) {
-                    result.push({ text: char, status: 'correct' });
-                    continue;
-                }
-                
-                if (userIdx < normUser.length && normUser[userIdx] === normChar) {
-                    result.push({ text: char, status: 'correct' });
-                    userIdx++;
-                } else {
-                    result.push({ text: char, status: 'missing' });
-                }
-            }
-            
-            const correctCount = result.filter(r => r.status === 'correct').length;
-            const totalChars = result.filter(r => normalizeJapanese(r.text)).length;
-            const score = totalChars > 0 ? Math.round((correctCount / totalChars) * 100) : 0;
-            
-            return { diff: result, score };
-        };
-
-        const checkAnswer = () => {
-            const segment = getCurrentSegment();
-            if (!segment) return;
-            
-            const correctText = getSegmentText(segment);
-            const { diff, score } = generateDiff(correctText, dictation.userInput);
-            
-            dictation.diffResult = diff;
-            dictation.currentScore = score;
-            dictation.mode = 'review';
-            dictation.totalAttempts++;
-            
-            if (score >= 80) {
-                dictation.correctCount++;
-                dictation.statusByIndex[dictation.segmentIndex] = 'correct';
-            } else {
-                dictation.statusByIndex[dictation.segmentIndex] = 'wrong';
-            }
-            dictation.answersByIndex[dictation.segmentIndex] = dictation.userInput;
-        };
-
-        const skipCurrentSegment = () => {
-            dictation.statusByIndex[dictation.segmentIndex] = 'skipped';
-            gotoNextSegment();
-        };
-
-        const handleDictationMainAction = () => {
-            if (dictation.mode === 'review') {
-                gotoNextSegment();
-            } else {
-                checkAnswer();
-            }
-        };
-
-        const handleDictationEnter = (event) => {
-            if (dictation.isComposing) return;
-            handleDictationMainAction();
-        };
-
-        const handleFileUpload = (event) => {
-            const file = event.target.files[0];
-            if (file) {
-                selectedFile.value = file;
-                videoUrl.value = ''; // Clear URL if file selected
-            }
-        };
-        
-        const handleFileDrop = (event) => {
-            const file = event.dataTransfer.files[0];
-             if (file && (file.type.startsWith('audio/') || file.type.startsWith('video/'))) {
-                selectedFile.value = file;
-                videoUrl.value = '';
-            }
-        };
-
-        const clearFile = () => {
-            selectedFile.value = null;
-            selectedSubtitleFile.value = null;
-            if (fileInput.value) fileInput.value.value = '';
-            if (subtitleInput.value) subtitleInput.value.value = '';
-        };
-
-        const handleSubtitleUpload = (event) => {
-            const file = event.target.files[0];
-            if (file) {
-                selectedSubtitleFile.value = file;
-            }
-        };
-
-        const clearSubtitleFile = () => {
-            selectedSubtitleFile.value = null;
-            if (subtitleInput.value) subtitleInput.value.value = '';
-        };
-
-        /**
-         * Upload a large file in chunks with optional subtitle upload.
-         * @param {File} file
-         * @param {File|null} subtitleFile
-         * @returns {Promise<string>}
-         */
-        const uploadChunks = async (file, subtitleFile) => {
-            try {
-                const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB chunks to be safe
-                const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-                const apiUrl = `${apiBaseUrl.value}/api`;
-
-                // 1. Init
-                const initFormData = new FormData();
-                initFormData.append('filename', file.name);
-                initFormData.append('total_chunks', totalChunks);
-                initFormData.append('total_size', file.size);
-                let initRes = await fetchWithAuth(`${apiUrl}/upload/init`, {
-                    method: 'POST',
-                    body: initFormData
-                });
-                if (!initRes.ok) {
-                    throw new Error("Failed to init upload");
-                }
-                const { task_id } = await initRes.json();
-
-                // 2. Upload Chunks
-                for (let i = 0; i < totalChunks; i++) {
-                    const start = i * CHUNK_SIZE;
-                    const end = Math.min(file.size, start + CHUNK_SIZE);
-                    const chunk = file.slice(start, end);
-
-                    const chunkFormData = new FormData();
-                    chunkFormData.append('task_id', task_id);
-                    chunkFormData.append('chunk_index', i);
-                    chunkFormData.append('file', chunk);
-
-                    // Update UI progress artificially for upload phase
-                    taskStatus.value = {
-                        status: 'processing',
-                        progress: Math.floor((i / totalChunks) * 100),
-                        message: `Uploading part ${i+1}/${totalChunks}...`
-                    };
-
-                    const chunkRes = await fetchWithAuth(`${apiUrl}/upload/chunk`, {
-                        method: 'POST',
-                        body: chunkFormData
-                    });
-
-                    if (!chunkRes.ok) {
-                        throw new Error(`Failed to upload chunk ${i}`);
-                    }
-                }
-                
-                // 2.5. Upload subtitle file if provided (as a single file, not chunked)
-                if (subtitleFile) {
-                    taskStatus.value = {
-                        status: 'processing',
-                        progress: 95,
-                        message: 'Uploading subtitle file...'
-                    };
-
-                    const subtitleFormData = new FormData();
-                    subtitleFormData.append('task_id', task_id);
-                    subtitleFormData.append('file', subtitleFile);
-
-                    const subtitleRes = await fetchWithAuth(`${apiUrl}/upload/subtitle`, {
-                        method: 'POST',
-                        body: subtitleFormData
-                    });
-
-                    if (!subtitleRes.ok) {
-                        console.warn('Failed to upload subtitle, continuing without it');
-                    }
-                }
-                
-                // 3. Complete
-                const completeFormData = new FormData();
-                completeFormData.append('task_id', task_id);
-                completeFormData.append('filename', file.name);
-                completeFormData.append('total_chunks', totalChunks);
-                completeFormData.append('total_size', file.size);
-                if (subtitleFile) {
-                    completeFormData.append('subtitle_filename', subtitleFile.name);
-                }
-
-                const completeRes = await fetchWithAuth(`${apiUrl}/upload/complete`, {
-                    method: 'POST',
-                    body: completeFormData
-                });
-
-                if (!completeRes.ok) {
-                    if (completeRes.status === 409) {
-                        const errorData = await completeRes.json();
-                        assetExists.value = {
-                            assetId: errorData.detail.asset_id,
-                            title: errorData.detail.title || file.name
-                        };
-                        return null; // Signal that upload was skipped due to existing asset
-                    }
-                    throw new Error("Failed to complete upload");
-                }
-                return task_id;
-        } catch (error) {
-            console.error('Upload error:', error);
-            throw error;
-        }
-        };
-
-        /**
-         * Start processing for a YouTube URL or uploaded file.
-         * @returns {Promise<void>}
-         */
-        const processVideo = async () => {
-            if (!videoUrl.value && !selectedFile.value) return;
-            
-            // Check for mock trigger
-            if (videoUrl.value === 'mock') {
-                console.log('Using Mock Data');
-                if (window.MOCK_DATA) {
-                    loading.value = true;
-                    videoData.value = window.MOCK_DATA.result;
-                    loading.value = false;
-                    nextTick(() => {
-                         // Mock video ID for youtube player, or file player logic
-                         // Since it's mock, we might not have a real player, but let's try to init player with mock ID
-                         initPlayer(window.MOCK_DATA.result.video_id);
-                    });
-                    return;
-                } else {
-                    console.error("Mock data not found");
-                }
-            }
-            
-            loading.value = true;
-            videoData.value = null;
-            warnings.value = [];
-            assetExists.value = null;
-            taskStatus.value = { status: 'pending', progress: 0, message: 'Initializing...' };
-            
-            try {
-                const apiUrl = `${apiBaseUrl.value}/api`;
-                let response;
-                let isFile = !!selectedFile.value;
-                isFileMode.value = isFile;
-                let data;
-
-                if (isFile) {
-                    // Check file size (e.g., > 5MB)
-                    const MAX_SIZE = 5 * 1024 * 1024;
-                    if (selectedFile.value.size > MAX_SIZE) {
-                        console.log('[Debug] Large file detected, using chunked upload');
-                        const taskId = await uploadChunks(selectedFile.value, selectedSubtitleFile.value);
-                        if (taskId === null && assetExists.value) {
-                            // Asset already exists, assetExists was set by uploadChunks
-                            loading.value = false;
-                            return;
-                        }
-                        data = { task_id: taskId };
-                    } else {
-                        console.log('[Debug] Attempting upload to:', `${apiUrl}/upload`);
-                        const formData = new FormData();
-                        formData.append('file', selectedFile.value);
-                        if (selectedSubtitleFile.value) {
-                            formData.append('subtitle', selectedSubtitleFile.value);
-                        }
-
-                        response = await fetchWithAuth(`${apiUrl}/upload`, {
-                            method: 'POST',
-                            body: formData
-                        });
-
-                        if (!response.ok) {
-                            if (response.status === 409) {
-                                const errorData = await response.json();
-                                assetExists.value = {
-                                    assetId: errorData.detail.asset_id,
-                                    title: errorData.detail.title || selectedFile.value.name
-                                };
-                                loading.value = false;
-                                return;
-                            }
-                            throw new Error(`API Error: ${response.statusText}`);
-                        }
-
-                        data = await response.json();
-                    }
-                } else {
-                    // Extract Video ID
-                    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-                    const match = videoUrl.value.match(regExp);
-                    
-                    if (!match || match[2].length !== 11) {
-                        showToast('无效的 YouTube 链接', 'error');
-                        loading.value = false;
-                        return;
-                    }
-                    const videoId = match[2];
-
-                    response = await fetchWithAuth(`${apiUrl}/process`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ url: videoUrl.value })
-                    });
-
-                    if (!response.ok) {
-                        if (response.status === 409) {
-                            const errorData = await response.json();
-                            assetExists.value = {
-                                assetId: errorData.detail.asset_id,
-                                title: errorData.detail.title || videoUrl.value
-                            };
-                            loading.value = false;
-                            return;
-                        }
-                        throw new Error(`API Error: ${response.statusText}`);
-                    }
-
-                    data = await response.json();
-                }
-                
-                // Start polling for status
-                if (data.task_id) {
-                     console.log('[Debug] Received task_id:', data.task_id);
-                     await pollStatus(data.task_id);
-                } else {
-                    // Fallback for immediate response (though backend is now async)
-                    videoData.value = data;
-                    loading.value = false; // Ensure loading is off
-                    nextTick(() => {
-                        if (isFileMode.value) {
-                            initFilePlayer(selectedFile.value);
-                        } else {
-                            initPlayer(data.video_id);
-                        }
-                    });
-                }
-                
-            } catch (e) {
-                console.error(e);
-                showToast(`处理失败: ${e.message}`, 'error');
-                loading.value = false;
-            }
-        };
-
-        /**
-         * Poll backend task status until completion or failure.
-         * @param {string} taskId
-         * @returns {Promise<void>}
-         */
-        const pollStatus = async (taskId) => {
-            const pollInterval = 5000; // 5 seconds
-
-            // Clear any existing poll timeout
-            if (pollTimeoutId) {
-                clearTimeout(pollTimeoutId);
-                pollTimeoutId = null;
-            }
-
-            const check = async () => {
-                try {
-                    const response = await fetch(`${apiBaseUrl.value}/api/status/${taskId}`, {
-                        credentials: 'include',
-                        signal: abortController.signal
-                    });
-                    if (!response.ok) {
-                        throw new Error("Failed to get status");
-                    }
-                    const statusData = await response.json();
-                    taskStatus.value = statusData;
-                    
-                    if (statusData.status === 'completed') {
-                        console.log('[Debug] Task completed. Result:', statusData.result);
-
-                        // Log metrics if they exist
-                        if (statusData.result.metrics) {
-                            console.log('%c ✨ Metrics ✨', 'color: #22C55E; font-size: 1.2em; font-weight: bold; padding: 5px;');
-                            console.table(statusData.result.metrics);
-                        }
-
-                        loading.value = false;
-
-                        // Auto-redirect to play page if asset_id is available
-                        if (statusData.result.asset_id) {
-                            // For admin uploads, show edit modal first
-                            if (isAdminMode.value) {
-                                console.log('[Debug] Admin mode: showing edit modal for asset:', statusData.result.asset_id);
-                                editForm.value = {
-                                    assetId: statusData.result.asset_id,
-                                    title: statusData.result.title || '',
-                                    description: ''
-                                };
-                                showEditModal.value = true;
-                                return;
-                            }
-                            console.log('[Debug] Redirecting to play page:', statusData.result.asset_id);
-                            Router.goToPlay(statusData.result.asset_id);
-                            return;
-                        }
-
-                        // Fallback: show in current page (for backward compatibility)
-                        console.log('[Debug] No asset_id, showing in current page');
-
-                        // Set warnings BEFORE videoData to ensure modal shows correctly
-                        console.log('[Debug] Processing warnings:', statusData.result.warnings);
-                        if (statusData.result.warnings && Array.isArray(statusData.result.warnings) && statusData.result.warnings.length > 0) {
-                            warnings.value = statusData.result.warnings;
-                            console.log('[Debug] Warnings set to UI:', warnings.value);
-                        } else {
-                            warnings.value = [];
-                        }
-
-                        videoData.value = statusData.result;
-
-                        // Check if segments exist
-                        if (statusData.result.segments && statusData.result.segments.length > 0) {
-                            console.log(`[Debug] Loaded ${statusData.result.segments.length} segments`);
-                        } else {
-                            console.warn('[Debug] No segments found in result');
-                        }
-
-                        // Wait for Vue to update the DOM so that #youtube-player exists
-                        nextTick(() => {
-                            if (isFileMode.value) {
-                                initFilePlayer(selectedFile.value);
-                            } else {
-                                initPlayer(statusData.result.video_id);
-                            }
-                        });
-                    } else if (statusData.status === 'failed') {
-                         throw new Error(statusData.error || "Processing failed");
-                    } else {
-                        // Continue polling
-                        pollTimeoutId = setTimeout(check, pollInterval);
-                    }
-                } catch (e) {
-                    // Ignore abort errors (page unload)
-                    if (e.name === 'AbortError') {
-                        console.log('[Debug] Polling aborted');
-                        return;
-                    }
-                    console.error("Polling error:", e);
-                    showToast(`处理出错: ${e.message}`, 'error');
-                    loading.value = false;
-                }
-            };
-            
-            // Start polling
-            check();
-        };
-
-        const visibleSegments = computed(() => {
-            if (!videoData.value || !videoData.value.segments) return [];
-
-            const segments = videoData.value.segments;
-            const current = currentSegmentIndex.value;
-            const range = contextRange.value;
-
-            // Determine the window of segments to show
-            // If current is -1 (not started), show the beginning
-            const centerIndex = current === -1 ? 0 : current;
-
-            const start = Math.max(0, centerIndex - range);
-            const end = Math.min(segments.length, centerIndex + range + 1);
-
-            // console.log('[Debug] Computing visibleSegments', { centerIndex, start, end });
-
-            return segments.slice(start, end).map((seg, index) => ({
-                ...seg,
-                originalIndex: start + index
-            }));
-        });
-
-        // Visible segments for play page
-        const playPageVisibleSegments = computed(() => {
-            if (!playPageData.value || !playPageData.value.segments) return [];
-
-            const segments = playPageData.value.segments;
-            const current = currentSegmentIndex.value;
-            const range = contextRange.value;
-
-            const centerIndex = current === -1 ? 0 : current;
-            const start = Math.max(0, centerIndex - range);
-            const end = Math.min(segments.length, centerIndex + range + 1);
-
-            return segments.slice(start, end).map((seg, index) => ({
-                ...seg,
-                originalIndex: start + index
-            }));
-        });
-
-        // Check if play page has word timestamps
-        const playPageHasWordTimestamps = computed(() => {
-            return playPageData.value?.has_word_timestamps !== false;
-        });
-
-        // Admin edit modal methods
         const saveEditAndNavigate = async () => {
             editSaving.value = true;
             try {
@@ -1929,85 +850,61 @@ createApp({
             Router.goToPlay(editForm.value.assetId);
         };
 
-        // Navigation context helpers for Play page
-        /**
-         * Navigate back based on navigation context.
-         * - From playlist → stay in playlist context (home)
-         * - From home/admin/upload → return to that page
-         * - Direct link → go to home
-         */
-        const navigateBack = () => {
-            Router.goBackToPrevious() || Router.goHome();
+        // ========================================================================
+        // INITIALIZATION
+        // ========================================================================
+
+        const initApp = () => {
+            initBackend();
+
+            Router.onRouteChange = handleRouteChange;
+            Router.init();
+
+            window.addEventListener('beforeunload', () => {
+                backendCleanup();
+                cleanupPolling();
+            });
         };
 
-        /**
-         * Get the back button label based on navigation source.
-         * @returns {string}
-         */
-        const backButtonLabel = computed(() => {
-            switch (navigationContext.source) {
-                case 'playlist':
-                    return '返回播放列表';
-                case 'home':
-                    return '返回首页';
-                case 'admin':
-                    return '返回管理';
-                case 'upload':
-                    return '返回上传';
-                default:
-                    return '返回首页';
+        onMounted(() => {
+            initApp();
+        });
+
+        onUnmounted(() => {
+            backendCleanup();
+            cleanupPolling();
+            window.removeEventListener('beforeunload', backendCleanup);
+        });
+
+        // Watch admin tab changes
+        watch(adminActiveTab, () => {
+            if (adminSession.value && currentRoute.value === 'admin') {
+                adminLoadData();
+            }
+            if (adminActiveTab.value !== 'playlists') {
+                adminActivePlaylist.value = null;
+                adminPlaylistItems.value = [];
+                adminPlaylistView.value = 'list';
             }
         });
 
-        /**
-         * Get breadcrumb items for the Play page.
-         * @returns {Array<{label: string, action: () => void}>}
-         */
-        const breadcrumbItems = computed(() => {
-            const items = [];
-
-            // Determine the first item based on navigation source
-            switch (navigationContext.source) {
-                case 'admin':
-                    items.push({ label: '管理', action: () => Router.goToAdmin() });
-                    break;
-                case 'upload':
-                    items.push({ label: '上传', action: () => Router.goToUpload() });
-                    break;
-                default:
-                    // 'home', 'direct', 'playlist' all start from home
-                    items.push({ label: '首页', action: () => Router.goHome() });
-                    break;
-            }
-
-            // Add playlist if applicable (only for home/playlist sources)
-            if (navigationContext.playlistTitle && (navigationContext.source === 'home' || navigationContext.source === 'playlist' || navigationContext.source === 'direct')) {
-                items.push({
-                    label: navigationContext.playlistTitle,
-                    action: () => Router.goHome() // Playlist context is accessed from home
-                });
-            }
-
-            // Current video (non-clickable)
-            if (playPageData.value) {
-                items.push({ label: playPageData.value.title, action: null });
-            }
-
-            return items;
-        });
+        // ========================================================================
+        // RETURN - Export all state and methods to template
+        // ========================================================================
 
         return {
+            // Upload state
             videoUrl,
             loading,
             videoData,
             warnings,
             assetExists,
             closeWarnings: () => { warnings.value = []; },
-            visibleSegments, // Export this so template can use it
-            contextRange,    // Export for potential UI control
-            processVideo,
+            visibleSegments,
+            contextRange,
+            handleProcessVideo,
             isWordActive,
-            hasWordTimestamps, // Export to control highlight mode in template
+            hasWordTimestamps,
             seekTo,
             currentSegmentIndex,
             segmentRefs,
@@ -2021,23 +918,28 @@ createApp({
             clearSubtitleFile,
             fileInput,
             subtitleInput,
+
+            // Backend state
             backendStatus,
             apiBaseUrl,
             checkBackendHealth,
             appReady,
             taskStatus,
+
+            // Dictation state
             dictation,
             targetPauseTime,
             dictationProgress,
             currentDictationText,
             playCurrentSegment,
             stopDictationPlayback,
-            toggleDictationPlayback,
-            gotoPrevSegment,
-            gotoNextSegment,
-            skipCurrentSegment,
-            handleDictationMainAction,
-            handleDictationEnter,
+            toggleDictationPlayback: toggleDictationPlaybackLocal,
+            gotoPrevSegment: gotoPrevSegmentLocal,
+            gotoNextSegment: gotoNextSegmentLocal,
+            skipCurrentSegment: skipCurrentSegmentLocal,
+            handleDictationMainAction: handleDictationMainActionLocal,
+            handleDictationEnter: handleDictationEnterLocal,
+
             // Router state
             currentRoute,
             playPageData,
@@ -2053,16 +955,19 @@ createApp({
             goToAdmin: () => Router.goToAdmin(),
             goToPlaylistAsset,
             isPlaylistItemActive,
+
             // Navigation context
             navigationContext,
             navigateBack,
             backButtonLabel,
             breadcrumbItems,
+
             // Home page state
             homeAssets,
             homeLoading,
             homeHasMore,
             loadMoreAssets: () => loadHomeAssets(true),
+
             // Admin mode state
             isAdminMode,
             showEditModal,
@@ -2070,6 +975,7 @@ createApp({
             editSaving,
             saveEditAndNavigate,
             skipEditAndNavigate,
+
             // Admin panel state
             adminSession,
             adminLoading,
@@ -2117,12 +1023,14 @@ createApp({
             adminAddPlaylistAsset,
             adminMovePlaylistItem,
             adminRemovePlaylistItem,
+
             // Toast notification system
             toasts,
             showToast,
             removeToast,
             toastIcon,
             toastClasses,
+
             // Custom confirm dialog
             confirmDialog,
             showConfirm,

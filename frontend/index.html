@@ -109,8 +109,8 @@
                         class="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                         :disabled="loading || !!selectedFile"
                     >
-                    <button 
-                        @click="processVideo" 
+                    <button
+                        @click="handleProcessVideo"
                         :disabled="loading || (!videoUrl && !selectedFile)"
                         class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
                     >
@@ -1428,6 +1428,15 @@
     <script src="js/api.js"></script>
     <script src="js/player.js"></script>
     <script src="js/subtitles.js"></script>
+    <!-- Composables -->
+    <script src="js/composables/useToast.js"></script>
+    <script src="js/composables/useConfirmDialog.js"></script>
+    <script src="js/composables/useBackend.js"></script>
+    <script src="js/composables/useHomeAssets.js"></script>
+    <script src="js/composables/useDictation.js"></script>
+    <script src="js/composables/useAdminPanel.js"></script>
+    <script src="js/composables/useFileUpload.js"></script>
+    <script src="js/composables/index.js"></script>
     <!-- App Logic -->
     <script src="js/app.js"></script>
     <!-- PWA Service Worker Registration -->
