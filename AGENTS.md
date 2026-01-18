@@ -98,6 +98,7 @@
 - **Message Format**:
   - **Subject**: Imperative mood ("Add feature", not "Added feature"), no trailing period, concise (< 72 chars).
   - **Body** (Optional): Use bullet points (`- `) for detailing changes in complex commits. Separate from subject with a blank line.
+- **No Co-Authored-By**: Do NOT include `Co-Authored-By` trailers in commit messages. This project does not use multi-author attribution.
 - **Example**:
   ```text
   Refactor backend into modular architecture
