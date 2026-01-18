@@ -193,7 +193,8 @@ test.describe('Play Page Playlist Sidebar', () => {
     await page.goto(`/#/play/${assetId}?playlist_id=${playlistId}`);
 
     await expect(page.getByText('Playlist', { exact: true })).toBeVisible();
-    await expect(page.locator('text=Test Playlist')).toBeVisible();
+    // Target the heading in the sidebar specifically, not the breadcrumb
+    await expect(page.locator('aside h3:has-text("Test Playlist")')).toBeVisible();
     await expect(page.locator('text=Lesson 2')).toBeVisible();
   });
 });

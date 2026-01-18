@@ -40,6 +40,14 @@ createApp({
         const playlistContext = ref(null);
         const playlistContextLoading = ref(false);
 
+        // Navigation context for Play page (breadcrumbs, back button)
+        const navigationContext = reactive({
+            source: 'direct', // 'home' | 'playlist' | 'upload' | 'admin' | 'direct'
+            playlistId: null,
+            playlistTitle: null,
+            canGoBack: false
+        });
+
         // Home page state
         const homeAssets = ref([]);
         const homeLoading = ref(false);
@@ -571,8 +579,7 @@ createApp({
         };
 
         const adminOpenPlayPage = (asset) => {
-            const appBaseUrl = new URL('./', window.location.href).href;
-            window.open(`${appBaseUrl}#/play/${asset.id}`, '_blank');
+            Router.goToPlay(asset.id);
         };
 
         const adminGoToUpload = () => {
@@ -825,9 +832,14 @@ createApp({
             playlistContextLoading.value = true;
             try {
                 playlistContext.value = await API.getPlaylistContext(playlistId, assetId);
+                // Update navigation context with playlist title for breadcrumb
+                if (playlistContext.value) {
+                    navigationContext.playlistTitle = playlistContext.value.playlist_title;
+                }
             } catch (e) {
                 console.warn('[Playlist] Failed to load context:', e);
                 playlistContext.value = null;
+                navigationContext.playlistTitle = null;
             } finally {
                 playlistContextLoading.value = false;
             }
@@ -927,6 +939,12 @@ createApp({
 
         const handleRouteChange = (route, params) => {
             currentRoute.value = route;
+
+            // Sync navigation context from router
+            const routerContext = Router.getNavigationContext();
+            navigationContext.source = routerContext.source;
+            navigationContext.playlistId = routerContext.playlistId;
+            navigationContext.canGoBack = routerContext.canGoBack;
 
             // Cleanup previous state
             PlayerManager.destroy();
@@ -1911,6 +1929,73 @@ createApp({
             Router.goToPlay(editForm.value.assetId);
         };
 
+        // Navigation context helpers for Play page
+        /**
+         * Navigate back based on navigation context.
+         * - From playlist → stay in playlist context (home)
+         * - From home/admin/upload → return to that page
+         * - Direct link → go to home
+         */
+        const navigateBack = () => {
+            Router.goBackToPrevious() || Router.goHome();
+        };
+
+        /**
+         * Get the back button label based on navigation source.
+         * @returns {string}
+         */
+        const backButtonLabel = computed(() => {
+            switch (navigationContext.source) {
+                case 'playlist':
+                    return '返回播放列表';
+                case 'home':
+                    return '返回首页';
+                case 'admin':
+                    return '返回管理';
+                case 'upload':
+                    return '返回上传';
+                default:
+                    return '返回首页';
+            }
+        });
+
+        /**
+         * Get breadcrumb items for the Play page.
+         * @returns {Array<{label: string, action: () => void}>}
+         */
+        const breadcrumbItems = computed(() => {
+            const items = [];
+
+            // Determine the first item based on navigation source
+            switch (navigationContext.source) {
+                case 'admin':
+                    items.push({ label: '管理', action: () => Router.goToAdmin() });
+                    break;
+                case 'upload':
+                    items.push({ label: '上传', action: () => Router.goToUpload() });
+                    break;
+                default:
+                    // 'home', 'direct', 'playlist' all start from home
+                    items.push({ label: '首页', action: () => Router.goHome() });
+                    break;
+            }
+
+            // Add playlist if applicable (only for home/playlist sources)
+            if (navigationContext.playlistTitle && (navigationContext.source === 'home' || navigationContext.source === 'playlist' || navigationContext.source === 'direct')) {
+                items.push({
+                    label: navigationContext.playlistTitle,
+                    action: () => Router.goHome() // Playlist context is accessed from home
+                });
+            }
+
+            // Current video (non-clickable)
+            if (playPageData.value) {
+                items.push({ label: playPageData.value.title, action: null });
+            }
+
+            return items;
+        });
+
         return {
             videoUrl,
             loading,
@@ -1968,6 +2053,11 @@ createApp({
             goToAdmin: () => Router.goToAdmin(),
             goToPlaylistAsset,
             isPlaylistItemActive,
+            // Navigation context
+            navigationContext,
+            navigateBack,
+            backButtonLabel,
+            breadcrumbItems,
             // Home page state
             homeAssets,
             homeLoading,

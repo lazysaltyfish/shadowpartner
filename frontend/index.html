@@ -235,9 +235,35 @@
 
             <!-- Play Page Content -->
             <div v-else-if="playPageData" class="flex-1 flex flex-col overflow-hidden gap-4">
-                <!-- Header -->
-                <div class="mb-2">
-                    <h2 class="text-xl font-semibold text-gray-800 truncate">{{ playPageData.title }}</h2>
+                <!-- Navigation Header with Breadcrumb -->
+                <div class="flex items-center justify-between gap-4 mb-2">
+                    <!-- Breadcrumb Navigation -->
+                    <nav class="flex items-center gap-2 text-sm overflow-hidden">
+                        <button
+                            v-for="(item, index) in breadcrumbItems"
+                            :key="index"
+                            @click="item.action"
+                            class="flex items-center gap-1 transition-colors"
+                            :class="item.action ? 'text-blue-600 hover:text-blue-700 hover:underline' : 'text-gray-800 font-medium truncate max-w-xs'"
+                        >
+                            <svg v-if="index > 0" class="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                            <span class="truncate">{{ item.label }}</span>
+                        </button>
+                    </nav>
+
+                    <!-- Back Button -->
+                    <button
+                        @click="navigateBack"
+                        class="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors flex-shrink-0"
+                        title="返回"
+                    >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                        </svg>
+                        <span class="hidden sm:inline">{{ backButtonLabel }}</span>
+                    </button>
                 </div>
 
                 <div class="flex-1 flex flex-col lg:flex-row gap-4 overflow-hidden">
