@@ -133,14 +133,21 @@ main.py                        # FastAPI app factory + wiring
 lifecycle.py                   # Startup/shutdown hooks
 middleware.py                  # Request logging + CORS
 rate_limiter.py               # Rate limiting singleton (slowapi wrapper)
-routes.py                      # API endpoints with per-endpoint rate limits
-admin_routes.py                # [NEW] Admin management endpoints (auth, CRUD)
+api_policy.py                 # Centralized rate limit tier definitions
+routers/                      # Modular router architecture
+  ├── __init__.py            # Exports all routers
+  ├── decorators.py          # Rate limit decorator
+  ├── public.py              # Public endpoints (no auth required)
+  ├── auth.py                # Endpoints requiring X-Session-Id (upload, process)
+  ├── admin_auth.py          # Admin login/logout (no auth required)
+  ├── admin.py               # Admin endpoints (users, assets, subtitles)
+  └── playlist.py            # Playlist management endpoints
 session_manager.py             # Anonymous auth session management (DB-backed) + admin sessions
 processing.py                  # Download/transcribe/analyze/translate pipeline + DB caching
 uploads.py                     # Upload sessions + sweeper + storage integration
 models.py                      # Pydantic models + UploadSession + AuthSession + AdminLoginRequest
 state.py                       # In-memory task store + upload sessions + auth sessions + admin sessions + executors
-db/                            # [NEW] Database module
+db/                            # Database module
   ├── __init__.py
   ├── engine.py               # Database engine (SQLite setup)
   ├── models.py               # SQLModel models (User, Asset, SubtitleTrack, Playlist, PlaylistAsset)
@@ -722,6 +729,13 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 - **Playlists**: Play page supports a playlist sidebar when `playlist_id` is present in the hash query; admin panel exposes playlist CRUD + item management with ordered positions and asset search, and playlist titles link to the first item for quick playback. Playlist owns `PlaylistAsset` via `Playlist.items` with `delete-orphan` so removing from the playlist (or deleting the playlist) deletes items. `Asset.playlist_items` uses ORM cascade `all, delete` (no `delete-orphan`) so deleting an asset through the ORM also cleans playlist items; treat this collection as read-only and avoid mutating it directly (code comment in `backend/db/models.py`). DB-level `ondelete="CASCADE"` remains as a safety net for non-ORM deletes.
 - **Playlist Ordering**: Position normalization shifts items to a temporary offset based on current max position plus a padding constant (`POSITION_OFFSET_PADDING`) to avoid unique constraint collisions before rewriting positions to contiguous indices.
 - **Frontend Docs**: Key frontend workflow functions and modules include JSDoc for easier navigation and maintenance.
+- **Router Architecture**: API endpoints are organized into separate routers by access level:
+  - `routers/public.py`: Public endpoints (no auth required) - `/`, `/health`, `/api/assets/*`, `/api/status/*`
+  - `routers/auth.py`: Endpoints requiring anonymous session (`X-Session-Id` header) - `/api/session`, `/api/upload/*`, `/api/process`
+  - `routers/admin_auth.py`: Admin login/logout (no auth required) - `/api/admin/login`, `/api/admin/logout`
+  - `routers/admin.py`: Admin endpoints requiring admin session (`X-Admin-Session-Id`) - `/api/admin/*`
+  - `routers/playlist.py`: Playlist management requiring admin session - `/api/playlists/*`
+  - Rate limits are centrally defined in `api_policy.py` and applied via `@rate_limit()` decorator
 - **Rate Limiting**: Implemented using slowapi (0.1.9) library with in-memory storage; different endpoints have different limits:
   - `/api/process`: 5/minute (expensive operation)
   - `/api/upload*`: 5/minute for upload/complete, 10/minute for subtitle, 300/minute for chunk
@@ -782,6 +796,39 @@ uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```bash
 cd backend
 uv run python main.py --no-rate-limit --port 8000
+```
+
+## AI Workflow: Adding New APIs
+
+When adding new API endpoints, follow this standardized workflow:
+
+### 1. Determine Access Level
+Choose the appropriate router based on who can access the endpoint:
+- **No authentication**: Add to `routers/public.py`
+- **Anonymous session (X-Session-Id)**: Add to `routers/auth.py` (router has `dependencies=[Depends(get_current_session)]`)
+- **Admin session (X-Admin-Session-Id)**: Add to `routers/admin.py` or `routers/playlist.py` (router has `dependencies=[Depends(get_current_admin_session)]`)
+- **Admin login/logout**: Add to `routers/admin_auth.py` (no router-level dependencies)
+
+### 2. Apply Rate Limit
+Use the `@rate_limit()` decorator with a tier from `api_policy.py`:
+```python
+from routers.decorators import rate_limit
+
+@router.get("/api/new-endpoint")
+@rate_limit("60/minute")  # or "exempt", "5/minute", etc.
+async def new_endpoint(request: Request):  # request: Request is required for slowapi
+    ...
+```
+
+**Important**: slowapi requires a `request: Request` parameter in all endpoint functions that use `@rate_limit()`.
+
+### 3. Run Tests
+Ensure all tests pass before committing:
+```bash
+cd backend
+uv run pytest tests/ -v
+uv run ruff format .
+uv run ruff check --fix .
 ```
 
 **Frontend**:

@@ -149,7 +149,15 @@ async def sweep_auth_sessions():
 async def get_current_session(
     request: Request, session_id: Optional[str] = Header(None, alias="X-Session-Id")
 ) -> AuthSession:
-    """FastAPI dependency to validate auth session from header."""
+    """FastAPI dependency to validate auth session from header.
+
+    Caches result in request.state to avoid redundant validation when called
+    multiple times (e.g., router-level + endpoint-level dependencies).
+    """
+    # Check cache first
+    if hasattr(request.state, "_auth_session"):
+        return request.state._auth_session
+
     if not session_id:
         raise HTTPException(status_code=401, detail="Session required")
 
@@ -157,6 +165,8 @@ async def get_current_session(
     if not session:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
 
+    # Cache for subsequent calls
+    request.state._auth_session = session
     return session
 
 
@@ -256,6 +266,9 @@ async def get_current_admin_session(
 ) -> AdminSession:
     """FastAPI dependency to validate admin session from header.
 
+    Caches result in request.state to avoid redundant validation when called
+    multiple times (e.g., router-level + endpoint-level dependencies).
+
     Args:
         request: FastAPI request object
         session_id: Admin session ID from X-Admin-Session-Id header
@@ -266,6 +279,10 @@ async def get_current_admin_session(
     Raises:
         HTTPException 401 if session is missing or invalid
     """
+    # Check cache first
+    if hasattr(request.state, "_admin_session"):
+        return request.state._admin_session
+
     if not session_id:
         raise HTTPException(status_code=401, detail="Admin session required")
 
@@ -273,6 +290,8 @@ async def get_current_admin_session(
     if not session:
         raise HTTPException(status_code=401, detail="Invalid or expired admin session")
 
+    # Cache for subsequent calls
+    request.state._admin_session = session
     return session
 
 

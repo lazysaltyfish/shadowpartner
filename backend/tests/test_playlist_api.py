@@ -12,7 +12,7 @@ from main import create_app
 
 @pytest.fixture(scope="function")
 def client():
-    app = create_app()
+    app = create_app(rate_limit_enabled_override=False)
     client = TestClient(app)
 
     def override_get_session():

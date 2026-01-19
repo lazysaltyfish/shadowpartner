@@ -6,11 +6,16 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 import settings
-from admin_routes import router as admin_router
 from lifecycle import shutdown_event, startup_event
 from middleware import add_cors_headers, add_security_headers, log_requests
 from rate_limiter import get_limiter
-from routes import router as api_router
+from routers import (
+    admin_auth_router,
+    admin_router,
+    auth_router,
+    playlist_router,
+    public_router,
+)
 from utils.logger import get_logger
 from utils.path_setup import setup_local_bin_path
 
@@ -60,8 +65,19 @@ def create_app(rate_limit_enabled_override: bool | None = None) -> FastAPI:
     app.middleware("http")(log_requests)
     app.middleware("http")(add_security_headers)
     app.middleware("http")(add_cors_headers)
-    app.include_router(api_router)
+
+    # Include routers in order of specificity (more specific paths first)
+    # admin_auth has /api/admin/login and /api/admin/logout (no auth required)
+    app.include_router(admin_auth_router)
+    # admin has /api/admin/* (requires admin session)
     app.include_router(admin_router)
+    # playlist has /api/playlists/* (requires admin session)
+    app.include_router(playlist_router)
+    # auth has /api/upload/* and /api/process (requires user session)
+    app.include_router(auth_router)
+    # public has all other endpoints (no auth required)
+    app.include_router(public_router)
+
     return app
 
 
