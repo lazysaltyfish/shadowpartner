@@ -255,6 +255,9 @@ async def delete_asset(session: Session, asset_id: uuid.UUID) -> bool:
 
     # Collect storage path for file deletion
     storage_path = asset.storage_path
+    thumbnail_path = None
+    if asset.meta:
+        thumbnail_path = asset.meta.get("thumbnail_path")
 
     # Delete asset (cascade will handle subtitle_tracks)
     session.delete(asset)
@@ -270,6 +273,16 @@ async def delete_asset(session: Session, asset_id: uuid.UUID) -> bool:
                     logger.warning(f"Storage file not found: {storage_path}")
             except Exception as e:
                 logger.error(f"Failed to delete storage file {storage_path}: {e}")
+
+    if thumbnail_path:
+        storage = services_registry.storage
+        if storage:
+            try:
+                success = await storage.delete(thumbnail_path)
+                if not success:
+                    logger.warning(f"Thumbnail file not found: {thumbnail_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete thumbnail file {thumbnail_path}: {e}")
 
     return True
 

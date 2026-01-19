@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, List, Optional, cast
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import desc, func
 from sqlalchemy.sql import ColumnElement
@@ -490,9 +490,13 @@ def _get_asset_title(db, asset: Asset) -> str:
     return ""
 
 
-def _get_asset_thumbnail(asset: Asset) -> Optional[str]:
+def _get_asset_thumbnail(asset: Asset, base_url: Optional[str] = None) -> Optional[str]:
     if asset.type == AssetType.YOUTUBE:
         return f"https://img.youtube.com/vi/{asset.identifier}/mqdefault.jpg"
+    if asset.type == AssetType.UPLOAD and base_url:
+        meta = asset.meta or {}
+        if meta.get("thumbnail_path"):
+            return f"{base_url}/api/assets/{asset.id}/thumbnail"
     return None
 
 
@@ -728,6 +732,7 @@ async def get_playlist_items(
 async def add_playlist_item(
     playlist_id: str,
     request: PlaylistItemCreateRequest,
+    http_request: Request,
     admin_session: AdminSession = Depends(get_current_admin_session),
 ):
     if request.position is not None and request.position < 0:
@@ -778,12 +783,13 @@ async def add_playlist_item(
         if insert_position > len(items):
             insert_position = len(items)
 
+        base_url = str(http_request.base_url).rstrip("/")
         new_item = PlaylistAsset(
             playlist_id=playlist.id,
             asset_id=asset.id,
             position=len(items) + 1000,
             cached_title=_get_asset_title(db, asset),
-            cached_thumbnail=_get_asset_thumbnail(asset),
+            cached_thumbnail=_get_asset_thumbnail(asset, base_url=base_url),
         )
         items.insert(insert_position, new_item)
         db.add(new_item)

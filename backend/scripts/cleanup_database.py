@@ -183,12 +183,13 @@ async def detect_orphaned_files(session: SessionLocal) -> List[str]:
         logger.warning("Storage not initialized, skipping file scan")
         return []
 
-    # Get all storage paths from database
-    db_storage_paths = {
-        p[0]
-        for p in session.query(Asset.storage_path).filter(Asset.storage_path.isnot(None)).all()
-        if p[0]
-    }
+    # Get all storage paths from database (including thumbnails stored in meta)
+    db_storage_paths = set()
+    for asset in session.query(Asset).all():
+        if asset.storage_path:
+            db_storage_paths.add(asset.storage_path)
+        if asset.meta and asset.meta.get("thumbnail_path"):
+            db_storage_paths.add(asset.meta.get("thumbnail_path"))
 
     # Scan storage directory for actual files
     storage_root = Path(settings.storage_root_dir)

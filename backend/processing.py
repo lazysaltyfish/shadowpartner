@@ -4,6 +4,7 @@ import asyncio
 import difflib
 import os
 import re
+import tempfile
 import time
 import uuid
 from collections import Counter
@@ -16,7 +17,7 @@ from db import get_session
 from db.crud import get_asset_by_identifier, get_cached_result
 from db.models import Asset, AssetType, SubtitleSource, SubtitleTrack, SubtitleTrackType
 from models import ProcessingMetrics, Segment, TaskStatus, VideoResponse, Word
-from services.video_utils import get_video_source
+from services.video_utils import build_thumbnail_storage_path, generate_thumbnail, get_video_source
 from uploads import release_upload_session
 from utils.logger import get_logger
 
@@ -58,6 +59,43 @@ async def run_cpu_bound(func, *args, **kwargs):
         return await asyncio.to_thread(func, *args, **kwargs)
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(state.executor, partial(func, *args, **kwargs))
+
+
+async def _generate_upload_thumbnail(
+    task_id: str,
+    file_path: str,
+    video_id: str,
+    storage,
+) -> Optional[str]:
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+            temp_path = tmp.name
+
+        await run_cpu_bound(generate_thumbnail, file_path, temp_path)
+        if not os.path.exists(temp_path):
+            logger.warning("Task %s: Thumbnail output missing", task_id)
+            return None
+
+        thumbnail_path = build_thumbnail_storage_path(video_id)
+        with open(temp_path, "rb") as thumb_file:
+            await storage.save(thumb_file, thumbnail_path)
+        logger.info("Task %s: Saved thumbnail to storage: %s", task_id, thumbnail_path)
+        return thumbnail_path
+    except Exception as e:
+        logger.warning("Task %s: Thumbnail generation failed: %s", task_id, e)
+        return None
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError as e:
+                logger.warning(
+                    "Task %s: Failed to cleanup thumbnail temp %s: %s",
+                    task_id,
+                    temp_path,
+                    e,
+                )
 
 
 def check_subtitle_similarity(
@@ -591,6 +629,7 @@ async def process_audio_task(
             AssetType.UPLOAD if get_video_source(video_id) == "upload" else AssetType.YOUTUBE
         )
         storage_path = None
+        thumbnail_path = None
         storage = services.storage
 
         if asset_type == AssetType.UPLOAD:
@@ -604,6 +643,10 @@ async def process_audio_task(
                     logger.info(f"Task {task_id}: Saved file to storage: {storage_path}")
             except Exception as e:
                 raise RuntimeError("Failed to save upload to storage") from e
+            thumbnail_path = await _generate_upload_thumbnail(task_id, file_path, video_id, storage)
+
+            if thumbnail_path:
+                asset_meta = {**(asset_meta or {}), "thumbnail_path": thumbnail_path}
 
         # Extract language detection results from Whisper transcription
         detected_language = gen_result.get("language", "ja")
@@ -632,6 +675,16 @@ async def process_audio_task(
                         "Task %s: Failed to cleanup stored file %s: %s",
                         task_id,
                         storage_path,
+                        cleanup_error,
+                    )
+            if thumbnail_path and storage is not None:
+                try:
+                    await storage.delete(thumbnail_path)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "Task %s: Failed to cleanup thumbnail %s: %s",
+                        task_id,
+                        thumbnail_path,
                         cleanup_error,
                     )
             raise

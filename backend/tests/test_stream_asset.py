@@ -110,6 +110,39 @@ def await_storage_save(storage, file_obj, path: str) -> str:
         loop.close()
 
 
+@pytest.fixture
+def test_asset_with_thumbnail(
+    client: TestClient, storage_dir: tempfile.TemporaryDirectory
+) -> tuple[uuid.UUID, str, bytes]:
+    """Create an upload asset with a thumbnail stored in storage."""
+    with get_session() as db:
+        user = get_or_create_guest_user(db, "127.0.0.1")
+        user_id = user.id
+
+    thumb_content = b"Test thumbnail content " * 20
+    thumb_obj = io.BytesIO(thumb_content)
+
+    import services_registry
+
+    storage = services_registry.storage
+    thumbnail_path = await_storage_save(storage, thumb_obj, "upload_thumb_test_123_thumb.jpg")
+
+    with get_session() as db:
+        asset = Asset(
+            type=AssetType.UPLOAD,
+            identifier="thumb_test_123",
+            storage_path="upload_video_stub_123",
+            meta={"thumbnail_path": thumbnail_path, "original_ext": ".mp4"},
+            created_by=user_id,
+        )
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+        asset_id = asset.id
+
+    return asset_id, thumbnail_path, thumb_content
+
+
 # ==================== Full File Streaming Tests ====================
 
 
@@ -130,6 +163,76 @@ def test_stream_full_file(client: TestClient, test_asset_with_file: tuple[uuid.U
     content = response.content
     assert len(content) > 0
     assert content == b"Test video file content " * 100
+
+
+# ==================== Thumbnail Tests ====================
+
+
+def test_get_thumbnail_success(
+    client: TestClient, test_asset_with_thumbnail: tuple[uuid.UUID, str, bytes]
+):
+    asset_id, _, thumb_content = test_asset_with_thumbnail
+
+    response = client.get(f"/api/assets/{asset_id}/thumbnail")
+
+    assert response.status_code == 200
+    assert "image" in response.headers["content-type"].lower()
+    assert response.headers.get("content-length") == str(len(thumb_content))
+    assert response.content == thumb_content
+
+
+def test_get_thumbnail_missing_meta(client: TestClient, storage_dir: tempfile.TemporaryDirectory):
+    with get_session() as db:
+        user = get_or_create_guest_user(db, "127.0.0.1")
+        asset = Asset(
+            type=AssetType.UPLOAD,
+            identifier="thumb_missing_meta",
+            storage_path="upload_video_missing_meta",
+            meta=None,
+            created_by=user.id,
+        )
+        db.add(asset)
+        db.commit()
+        asset_id = asset.id
+
+    response = client.get(f"/api/assets/{asset_id}/thumbnail")
+    assert response.status_code == 404
+
+
+def test_get_thumbnail_missing_file(client: TestClient, storage_dir: tempfile.TemporaryDirectory):
+    with get_session() as db:
+        user = get_or_create_guest_user(db, "127.0.0.1")
+        asset = Asset(
+            type=AssetType.UPLOAD,
+            identifier="thumb_missing_file",
+            storage_path="upload_video_missing_file",
+            meta={"thumbnail_path": "upload_missing_thumb.jpg"},
+            created_by=user.id,
+        )
+        db.add(asset)
+        db.commit()
+        asset_id = asset.id
+
+    response = client.get(f"/api/assets/{asset_id}/thumbnail")
+    assert response.status_code == 404
+
+
+def test_get_thumbnail_non_upload(client: TestClient):
+    with get_session() as db:
+        user = get_or_create_guest_user(db, "127.0.0.1")
+        asset = Asset(
+            type=AssetType.YOUTUBE,
+            identifier="yt_thumb_test",
+            storage_path=None,
+            meta={"thumbnail_path": "upload_irrelevant_thumb.jpg"},
+            created_by=user.id,
+        )
+        db.add(asset)
+        db.commit()
+        asset_id = asset.id
+
+    response = client.get(f"/api/assets/{asset_id}/thumbnail")
+    assert response.status_code == 404
 
 
 def test_stream_full_file_mp3(client: TestClient, storage_dir: tempfile.TemporaryDirectory):

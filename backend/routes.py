@@ -89,6 +89,18 @@ def _get_existing_asset(identifier: str, asset_type: AssetType) -> Optional[Asse
         return get_asset_by_identifier(db, asset_type, identifier)
 
 
+def _get_asset_thumbnail_url(request: Request, asset: Asset) -> Optional[str]:
+    if asset.type == AssetType.YOUTUBE:
+        return f"https://img.youtube.com/vi/{asset.identifier}/mqdefault.jpg"
+
+    if asset.type == AssetType.UPLOAD and asset.meta:
+        if asset.meta.get("thumbnail_path"):
+            base_url = str(request.base_url).rstrip("/")
+            return f"{base_url}/api/assets/{asset.id}/thumbnail"
+
+    return None
+
+
 async def handle_existing_file(
     file_path: str,
     filename: str,
@@ -609,6 +621,7 @@ async def upload_video(
 
 @router.get("/api/assets/search")
 async def search_assets(
+    request: Request,
     q: str = "",
     limit: int = 50,
     offset: int = 0,
@@ -651,9 +664,7 @@ async def search_assets(
             meta_title = (asset.meta or {}).get("title")
             track_title = track.content.get("title", "") if track else ""
             title = meta_title if meta_title else track_title
-            thumbnail = None
-            if asset.type == AssetType.YOUTUBE:
-                thumbnail = f"https://img.youtube.com/vi/{asset.identifier}/mqdefault.jpg"
+            thumbnail = _get_asset_thumbnail_url(request, asset)
             results.append(
                 {
                     "id": str(asset.id),
@@ -691,9 +702,7 @@ async def get_asset(request: Request, asset_id: str, limit: int = 20, offset: in
                 meta_title = (asset.meta or {}).get("title")
                 track_title = track.content.get("title", "") if track else ""
                 title = meta_title if meta_title else track_title
-                thumbnail = None
-                if asset.type == AssetType.YOUTUBE:
-                    thumbnail = f"https://img.youtube.com/vi/{asset.identifier}/mqdefault.jpg"
+                thumbnail = _get_asset_thumbnail_url(request, asset)
                 items.append(
                     {
                         "id": str(asset.id),
@@ -749,6 +758,44 @@ async def get_asset(request: Request, asset_id: str, limit: int = 20, offset: in
             "has_word_timestamps": content.get("has_word_timestamps", True),
             "created_at": asset.created_at.isoformat(),
         }
+
+
+@router.get("/api/assets/{asset_id}/thumbnail")
+@limiter.limit("60/minute")
+async def get_asset_thumbnail(request: Request, asset_id: str):
+    try:
+        asset_uuid = uuid.UUID(asset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+
+    with get_session() as db:
+        asset = get_asset_by_id(db, asset_uuid)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        if asset.type != AssetType.UPLOAD:
+            raise HTTPException(status_code=404, detail="Thumbnail not available")
+
+        asset_meta = asset.meta or {}
+        thumbnail_path = asset_meta.get("thumbnail_path")
+        if not thumbnail_path:
+            raise HTTPException(status_code=404, detail="Thumbnail not available")
+
+    storage = services_registry.storage
+    if storage is None:
+        raise HTTPException(status_code=500, detail="Storage service not available")
+
+    if not await storage.exists(thumbnail_path):
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+    file_size = await storage.get_file_size(thumbnail_path)
+    mime_type = await storage.get_mime_type(thumbnail_path)
+
+    return StreamingResponse(
+        storage.iter_file(thumbnail_path, chunk_size=8192),
+        media_type=mime_type,
+        headers={"Content-Length": str(file_size)},
+    )
 
 
 @router.get("/api/assets/{asset_id}/stream")

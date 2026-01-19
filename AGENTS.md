@@ -303,8 +303,12 @@ Input (File + User SRT Subtitle)
   - When `asset_id` is `list`: Returns paginated list of processed assets
     - Query params: `limit` (default 20), `offset` (default 0)
     - Returns: `{ items: [{ id, type, title, thumbnail, created_at }], total }`
-    - Thumbnail: YouTube uses `https://img.youtube.com/vi/{id}/mqdefault.jpg`, uploads return `null`
+    - Thumbnail: YouTube uses `https://img.youtube.com/vi/{id}/mqdefault.jpg`, uploads use `/api/assets/{asset_id}/thumbnail` when available
     - Only assets with a default processed subtitle track are included
+  - Public endpoint, no authentication required
+  - **Rate Limit**: 60 requests per minute
+- `GET /api/assets/{asset_id}/thumbnail` - Stream upload thumbnail (JPEG)
+  - Only available for `upload` type assets with generated thumbnails
   - Public endpoint, no authentication required
   - **Rate Limit**: 60 requests per minute
 - `GET /api/assets/{asset_id}/stream` - Stream media file
@@ -474,7 +478,7 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
   type: Enum,  # "youtube" or "upload"
   identifier: str,  # YouTube ID or file SHA256 (unique index)
   storage_path: Optional[str],  # Only for UPLOAD type
-  meta: Optional[dict],  # Title, description, duration, thumbnail URL
+  meta: Optional[dict],  # Title, description, duration, thumbnail_path (upload)
   created_by: UUID,  # FK -> User.id
   is_admin_upload: bool,  # True if uploaded by admin (default: False)
   created_at: DateTime,
@@ -672,6 +676,9 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 - **Download Offload**: YouTube downloads run in a background thread to avoid blocking the event loop
 - **Thread-Local MeCab**: Analyzer uses per-thread Tagger instances for safe concurrent NLP
 - **Upload I/O**: Upload writes and file hashing are offloaded to threads; chunked uploads track per-task session state to handle retries, reject out-of-order chunks, and validate total chunks/size; expired upload sessions are cleaned by a TTL sweeper
+- **Upload Thumbnails**: ffmpeg generates a JPEG thumbnail for uploaded videos, stored as
+  `meta.thumbnail_path` and served via `/api/assets/{asset_id}/thumbnail` (tests in
+  `backend/tests/test_stream_asset.py` and `backend/tests/test_admin.py`)
 - **Frontend State**: Input/upload UI hides once `videoData` is available so the player/subtitle view is uncluttered
 - **Furigana Logic**: Katakana → Hiragana conversion, handles special cases
 - **Subtitle Calibration**: Character-level timestamp interpolation for precise alignment

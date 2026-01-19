@@ -675,6 +675,21 @@ def test_asset_falls_back_to_track_content_title(client, test_user):
     assert data["title"] == track_title
 
 
+def test_asset_list_includes_upload_thumbnail(client, test_user):
+    with get_session() as db:
+        asset = db.query(Asset).filter(Asset.created_by == test_user).first()
+        asset.meta = {"thumbnail_path": "upload_thumb_meta_123.jpg"}
+        db.commit()
+        asset_id = asset.id
+
+    response = client.get("/api/assets/list")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    asset_item = next((item for item in items if item["id"] == str(asset_id)), None)
+    assert asset_item is not None
+    assert asset_item["thumbnail"] == f"http://testserver/api/assets/{asset_id}/thumbnail"
+
+
 # ==================== Storage File Deletion Tests ====================
 
 
@@ -694,10 +709,13 @@ def test_delete_asset_deletes_storage_file(admin_client, test_user):
     # Create a test file in storage
     test_content = b"Test storage file content " * 50
     file_obj = io.BytesIO(test_content)
+    thumb_content = b"Test thumbnail content " * 20
+    thumb_obj = io.BytesIO(thumb_content)
 
     storage = services_registry.storage
     # Save file to storage
     storage_path = asyncio.run(storage.save(file_obj, "upload_storage_test_123"))
+    thumbnail_path = asyncio.run(storage.save(thumb_obj, "upload_storage_test_123_thumb.jpg"))
 
     # Create asset with storage path
     with get_session() as db:
@@ -705,7 +723,7 @@ def test_delete_asset_deletes_storage_file(admin_client, test_user):
             type=AssetType.UPLOAD,
             identifier="storage_test_123",
             storage_path=storage_path,
-            meta={"original_ext": ".mp4"},
+            meta={"original_ext": ".mp4", "thumbnail_path": thumbnail_path},
             created_by=test_user,
         )
         db.add(asset)
@@ -715,6 +733,8 @@ def test_delete_asset_deletes_storage_file(admin_client, test_user):
     # Verify file exists before deletion
     exists_before = asyncio.run(storage.exists(storage_path))
     assert exists_before is True
+    thumb_exists_before = asyncio.run(storage.exists(thumbnail_path))
+    assert thumb_exists_before is True
 
     # Delete asset via admin API
     response = admin_client.delete(f"/api/admin/assets/{asset_id}")
@@ -723,6 +743,8 @@ def test_delete_asset_deletes_storage_file(admin_client, test_user):
     # Verify storage file was deleted
     exists_after = asyncio.run(storage.exists(storage_path))
     assert exists_after is False
+    thumb_exists_after = asyncio.run(storage.exists(thumbnail_path))
+    assert thumb_exists_after is False
 
 
 def test_delete_user_deletes_all_storage_files(admin_client):
