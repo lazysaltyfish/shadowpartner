@@ -5,7 +5,6 @@ This module contains all endpoints that are accessible without any session.
 
 from __future__ import annotations
 
-import session_manager
 import uuid
 from typing import Any, Optional, cast
 
@@ -14,7 +13,9 @@ from sqlalchemy import desc, func
 from sqlalchemy.sql import ColumnElement
 
 import services_registry
+import session_manager
 import state
+from api_policy import RateLimitTier
 from db import get_session
 from db.crud import (
     get_all_assets,
@@ -25,7 +26,6 @@ from db.crud import (
     get_vocabulary_stats,
 )
 from db.models import Asset, AssetType, SubtitleTrack, SubtitleTrackType
-from api_policy import RateLimitTier
 from models import Segment, SessionResponse, TaskInfo, Word
 from routers.decorators import rate_limit
 from session_manager import AdminSession, get_current_admin_session

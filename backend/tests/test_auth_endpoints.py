@@ -12,8 +12,9 @@ when refactoring router dependencies.
 from __future__ import annotations
 
 import pytest
-from main import create_app
 from fastapi.testclient import TestClient
+
+from main import create_app
 
 
 @pytest.fixture(scope="function")
@@ -49,6 +50,7 @@ class TestSessionEndpoint:
 
         # Verify the session ID is a valid UUID format
         import uuid
+
         try:
             uuid.UUID(session_id)
         except ValueError:
@@ -61,8 +63,7 @@ class TestProcessEndpointAuth:
     def test_process_requires_auth(self, client: TestClient):
         """Test that /api/process returns 401 without X-Session-Id header."""
         response = client.post(
-            "/api/process",
-            json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+            "/api/process", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
         )
         assert response.status_code == 401, (
             f"/api/process should require authentication. "
@@ -82,7 +83,7 @@ class TestProcessEndpointAuth:
         process_response = client.post(
             "/api/process",
             json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
-            headers={"X-Session-Id": session_id}
+            headers={"X-Session-Id": session_id},
         )
         # Should get 200 (task created) or a download error, but NOT 401
         assert process_response.status_code != 401, (
@@ -102,7 +103,7 @@ class TestProcessEndpointAuth:
         response = client.post(
             "/api/process",
             json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
-            headers={"X-Session-Id": "invalid-session-id-12345"}
+            headers={"X-Session-Id": "invalid-session-id-12345"},
         )
         assert response.status_code == 401, (
             f"/api/process should reject invalid session. "
@@ -116,12 +117,7 @@ class TestUploadEndpointsAuth:
     def test_upload_init_requires_auth(self, client: TestClient):
         """Test that /api/upload/init returns 401 without X-Session-Id."""
         response = client.post(
-            "/api/upload/init",
-            data={
-                "filename": "test.mp3",
-                "total_chunks": 1,
-                "total_size": 1024
-            }
+            "/api/upload/init", data={"filename": "test.mp3", "total_chunks": 1, "total_size": 1024}
         )
         assert response.status_code == 401, (
             f"/api/upload/init should require authentication. "
@@ -138,12 +134,8 @@ class TestUploadEndpointsAuth:
         # Now call upload/init with the session
         response = client.post(
             "/api/upload/init",
-            data={
-                "filename": "test.mp3",
-                "total_chunks": 1,
-                "total_size": 1024
-            },
-            headers={"X-Session-Id": session_id}
+            data={"filename": "test.mp3", "total_chunks": 1, "total_size": 1024},
+            headers={"X-Session-Id": session_id},
         )
         assert response.status_code == 200, (
             f"/api/upload/init should work with valid session. "
@@ -156,8 +148,7 @@ class TestUploadEndpointsAuth:
         """Test that /api/upload returns 401 without X-Session-Id."""
         # Use a small dummy file
         response = client.post(
-            "/api/upload",
-            files={"file": ("test.mp3", b"dummy content", "audio/mpeg")}
+            "/api/upload", files={"file": ("test.mp3", b"dummy content", "audio/mpeg")}
         )
         assert response.status_code == 401, (
             f"/api/upload should require authentication. "

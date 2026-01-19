@@ -26,10 +26,10 @@ from sqlalchemy.sql import ColumnElement
 
 import session_manager
 import state
+from api_policy import RateLimitTier
 from db import get_session
 from db.crud import get_asset_by_identifier
 from db.models import Asset, AssetType
-from api_policy import RateLimitTier
 from models import (
     AsyncProcessResponse,
     AuthSession,

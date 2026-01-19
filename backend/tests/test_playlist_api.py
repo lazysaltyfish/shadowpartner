@@ -47,13 +47,90 @@ def admin_client(client):
     return client
 
 
-def test_get_playlists_requires_admin(client):
+def test_get_playlists_is_public(client):
+    """GET /api/playlists is public and does not require admin auth."""
     response = client.get("/api/playlists")
-    assert response.status_code == 401
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert "total" in data
 
 
 def test_create_playlist_requires_admin(client):
     response = client.post("/api/playlists", json={"title": "Test"})
+    assert response.status_code == 401
+
+
+def test_get_playlist_by_id_is_public(client, test_playlist):
+    """GET /api/playlists/{id} is public and does not require admin auth."""
+    response = client.get(f"/api/playlists/{test_playlist.id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == str(test_playlist.id)
+
+
+def test_get_playlist_items_is_public(client, test_playlist):
+    """GET /api/playlists/{id}/items is public and does not require admin auth."""
+    response = client.get(f"/api/playlists/{test_playlist.id}/items")
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert "total" in data
+
+
+def test_get_playlist_context_is_public(client, test_playlist_with_items):
+    """GET /api/playlists/{id}/context is public and does not require admin auth."""
+    # First get items to find an asset_id
+    response = client.get(f"/api/playlists/{test_playlist_with_items.id}/items")
+    asset_id = response.json()["items"][0]["asset_id"]
+
+    response = client.get(
+        f"/api/playlists/{test_playlist_with_items.id}/context?asset_id={asset_id}"
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["playlist_id"] == str(test_playlist_with_items.id)
+
+
+def test_update_playlist_requires_admin(client, test_playlist):
+    """PUT /api/playlists/{id} requires admin auth."""
+    response = client.put(f"/api/playlists/{test_playlist.id}", json={"title": "Updated"})
+    assert response.status_code == 401
+
+
+def test_delete_playlist_requires_admin(client, test_playlist):
+    """DELETE /api/playlists/{id} requires admin auth."""
+    response = client.delete(f"/api/playlists/{test_playlist.id}")
+    assert response.status_code == 401
+
+
+def test_add_playlist_item_requires_admin(client, test_playlist, test_assets):
+    """POST /api/playlists/{id}/items requires admin auth."""
+    payload = {"asset_id": str(test_assets[0])}
+    response = client.post(f"/api/playlists/{test_playlist.id}/items", json=payload)
+    assert response.status_code == 401
+
+
+def test_set_playlist_item_position_requires_admin(client, test_playlist_with_items):
+    """PUT /api/playlists/{id}/items/{asset_id} requires admin auth."""
+    # Get items via public endpoint
+    response = client.get(f"/api/playlists/{test_playlist_with_items.id}/items")
+    asset_id = response.json()["items"][0]["asset_id"]
+
+    response = client.put(
+        f"/api/playlists/{test_playlist_with_items.id}/items/{asset_id}",
+        json={"position": 1},
+    )
+    assert response.status_code == 401
+
+
+def test_delete_playlist_item_requires_admin(client, test_playlist_with_items):
+    """DELETE /api/playlists/{id}/items/{asset_id} requires admin auth."""
+    # Get items via public endpoint
+    response = client.get(f"/api/playlists/{test_playlist_with_items.id}/items")
+    asset_id = response.json()["items"][0]["asset_id"]
+
+    response = client.delete(f"/api/playlists/{test_playlist_with_items.id}/items/{asset_id}")
     assert response.status_code == 401
 
 

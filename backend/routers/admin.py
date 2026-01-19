@@ -9,10 +9,10 @@ import uuid
 from typing import Any, List, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from api_policy import RateLimitTier
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.sql import ColumnElement
 
+from api_policy import RateLimitTier
 from db import get_session
 from db.crud import (
     delete_asset,

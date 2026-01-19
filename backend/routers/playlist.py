@@ -1,6 +1,8 @@
-"""Playlist API routes - requires X-Admin-Session-Id header.
+"""Playlist API routes.
 
 This module contains endpoints for managing playlists.
+- GET endpoints are public (no authentication required)
+- POST/PUT/DELETE endpoints require X-Admin-Session-Id header
 """
 
 from __future__ import annotations
@@ -9,11 +11,11 @@ import uuid
 from typing import Any, List, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from api_policy import RateLimitTier
 from pydantic import BaseModel
 from sqlalchemy import desc, func
 from sqlalchemy.sql import ColumnElement
 
+from api_policy import RateLimitTier
 from db import get_session
 from db.crud import get_asset_by_id, get_subtitle_track_by_asset
 from db.models import (
@@ -31,7 +33,6 @@ from utils.logger import get_logger
 
 router = APIRouter(
     prefix="/api/playlists",
-    dependencies=[Depends(get_current_admin_session)],
     tags=["playlists"],
 )
 logger = get_logger(__name__)
@@ -106,10 +107,9 @@ def _normalize_playlist_positions(db, items: List[PlaylistAsset]) -> None:
 
 
 @router.get("")
-@rate_limit(RateLimitTier.ADMIN)
+@rate_limit(RateLimitTier.LOW)
 async def list_playlists(
     request: Request,
-    admin_session: AdminSession = Depends(get_current_admin_session),
     limit: int = 100,
     offset: int = 0,
 ):
@@ -151,11 +151,10 @@ async def list_playlists(
 
 
 @router.get("/{playlist_id}")
-@rate_limit(RateLimitTier.ADMIN)
+@rate_limit(RateLimitTier.LOW)
 async def get_playlist(
     request: Request,
     playlist_id: str,
-    admin_session: AdminSession = Depends(get_current_admin_session),
 ):
     try:
         playlist_uuid = uuid.UUID(playlist_id)
@@ -300,11 +299,10 @@ async def delete_playlist(
 
 
 @router.get("/{playlist_id}/items")
-@rate_limit(RateLimitTier.ADMIN)
+@rate_limit(RateLimitTier.LOW)
 async def get_playlist_items(
     request: Request,
     playlist_id: str,
-    admin_session: AdminSession = Depends(get_current_admin_session),
 ):
     try:
         playlist_uuid = uuid.UUID(playlist_id)
@@ -510,12 +508,11 @@ async def delete_playlist_item(
 
 
 @router.get("/{playlist_id}/context")
-@rate_limit(RateLimitTier.ADMIN)
+@rate_limit(RateLimitTier.LOW)
 async def get_playlist_context(
     request: Request,
     playlist_id: str,
     asset_id: str,
-    admin_session: AdminSession = Depends(get_current_admin_session),
 ):
     try:
         playlist_uuid = uuid.UUID(playlist_id)

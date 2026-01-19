@@ -384,38 +384,34 @@ Input (File + User SRT Subtitle)
 - `DELETE /api/admin/subtitle-tracks/{track_id}` - Delete subtitle track
   - Requires: `X-Admin-Session-Id` header
 
-### Playlists (Admin-only)
+### Playlists
+Public endpoints (no authentication required):
 - `GET /api/playlists` - List playlists
-  - Requires: `X-Admin-Session-Id` header
   - Returns: `{ items: [{ id, title, description, cover_image, playlist_type, owner_type, item_count, created_at, updated_at }], total }`
   - `item_count` computed via aggregate query (no per-playlist count query)
+  - **Rate Limit**: 60 requests per minute
 - `GET /api/playlists/{playlist_id}` - Get playlist with items
-  - Requires: `X-Admin-Session-Id` header
   - Returns: `{ id, title, description, cover_image, playlist_type, owner_type, created_at, updated_at, items: [{ asset_id, position, cached_title, cached_thumbnail, added_at }] }`
+  - **Rate Limit**: 60 requests per minute
+- `GET /api/playlists/{playlist_id}/items` - List playlist items
+  - Returns: `{ items: [{ asset_id, position, cached_title, cached_thumbnail, added_at }], total }`
+  - **Rate Limit**: 60 requests per minute
+- `GET /api/playlists/{playlist_id}/context?asset_id={asset_id}` - Playlist context for play page
+  - Returns: `{ playlist_id, playlist_title, current_position, items: [{ asset_id, position, cached_title }] }`
+  - **Rate Limit**: 60 requests per minute
+
+Admin endpoints (require `X-Admin-Session-Id` header):
 - `POST /api/playlists` - Create playlist
-  - Requires: `X-Admin-Session-Id` header
   - Input: `{ "title": str, "description"?: str, "cover_image"?: str }`
 - `PUT /api/playlists/{playlist_id}` - Update playlist
-  - Requires: `X-Admin-Session-Id` header
   - Input: `{ "title"?: str, "description"?: str, "cover_image"?: str }`
 - `DELETE /api/playlists/{playlist_id}` - Delete playlist
-  - Requires: `X-Admin-Session-Id` header
-- `GET /api/playlists/{playlist_id}/items` - List playlist items
-  - Requires: `X-Admin-Session-Id` header
-  - Returns: `{ items: [{ asset_id, position, cached_title, cached_thumbnail, added_at }], total }`
 - `POST /api/playlists/{playlist_id}/items` - Add asset to playlist
-  - Requires: `X-Admin-Session-Id` header
   - Input: `{ "asset_id": UUID, "position"?: int }`
 - `PUT /api/playlists/{playlist_id}/items/{asset_id}` - Reorder playlist item
-  - Requires: `X-Admin-Session-Id` header
   - Input: `{ "position": int }`
 - `DELETE /api/playlists/{playlist_id}/items/{asset_id}` - Remove item
-  - Requires: `X-Admin-Session-Id` header
-- `GET /api/playlists/{playlist_id}/context?asset_id={asset_id}` - Playlist context for play page
-  - Requires: `X-Admin-Session-Id` header
-  - Returns: `{ playlist_id, playlist_title, current_position, items: [{ asset_id, position, cached_title }] }`
 - `GET /api/assets/search?q={term}` - Search processed assets by title/identifier
-  - Requires: `X-Admin-Session-Id` header
   - DB-level filtering on identifier and title (meta title fallback to processed track title) with pagination; no in-memory scan
 
 ## Maintenance Scripts
@@ -688,7 +684,7 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 8. **Admin Panel**: Admin interface for managing users, assets, and subtitle tracks (requires ADMIN_USERNAME/PASSWORD)
 9. **Play Page Routing**: Dedicated play page via hash routing (`#/play/{asset_id}`), auto-redirect after processing
 10. **Frontend Routing**: Hash-based SPA routing with `/` (home video grid), `/upload` (upload page), and `/play/{asset_id}` routes
-11. **Playlists (Admin)**: Admin-managed playlists with ordered items, asset search, and play page sidebar context via `playlist_id`
+11. **Playlists**: Publicly readable playlists (admin-managed for creation/modification) with ordered items, asset search, and play page sidebar context via `playlist_id`
 
 ## Important Implementation Details
 - **Persistent Architecture**: Database-based storage with SQLite (easily upgradable to PostgreSQL via DATABASE_URL env var)
