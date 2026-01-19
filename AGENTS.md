@@ -173,6 +173,7 @@ services/
   ├── analyzer.py              # Japanese morphological analysis
   ├── aligner.py               # Timestamp alignment & calibration
   ├── translator.py            # Gemini translation
+  ├── vocabulary_analyzer.py   # Gemini vocabulary extraction (N1/N2/Business)
   ├── subtitle_linearizer.py   # Scrolling subtitle deduplication
   ├── video_utils.py           # Video utilities
   └── storage/               # Storage abstraction layer (fully async)
@@ -210,6 +211,7 @@ Input (YouTube URL or File)
   → Whisper transcription with word timestamps (transcriber.py)
   → Japanese morphological analysis + furigana (analyzer.py)
   → Batch translate to Chinese (translator.py)
+  → Vocabulary extraction (vocabulary_analyzer.py, Japanese-only)
   → Save to DB (SubtitleTrack table)
   → Return segments with interactive words
   → Frontend displays with click-to-seek
@@ -227,6 +229,7 @@ Input (File + User SRT Subtitle)
   → Align & calibrate user subtitle with AI timestamps (aligner.py)
   → Japanese morphological analysis + furigana (analyzer.py)
   → Batch translate to Chinese (translator.py)
+  → Vocabulary extraction (vocabulary_analyzer.py, Japanese-only)
   → Save to DB (SubtitleTrack table)
   → Return segments (no word-level timestamps, only segment-level)
   → Frontend displays with click-to-seek
@@ -316,6 +319,11 @@ Input (File + User SRT Subtitle)
   - Supports HTTP Range requests for video seeking
   - Returns appropriate MIME type based on file extension
   - **Rate Limit**: 30 requests per minute
+- `GET /api/assets/{asset_id}/vocabulary` - Get extracted vocabulary for an asset
+  - Query params: `jlpt_level` (optional: N1, N2, N3, N4, N5, Business)
+  - Returns: `{ asset_id, total_count, items: [...], stats: { N1, N2, N3, N4, N5, Business, Other } }`
+  - Public endpoint, no authentication required
+  - **Rate Limit**: 60 requests per minute
 
 ### Health Check
 - `GET /` - API heartbeat
@@ -411,9 +419,10 @@ A standalone CLI tool to detect and clean up orphaned database records and stora
 
 **Types of Orphans Detected**:
 1. **Orphaned SubtitleTracks**: Records referencing non-existent assets (referential integrity violations)
-2. **Orphaned Assets**: Asset records with missing storage files (files deleted but DB records remain)
-3. **Orphaned Files**: Storage files with no corresponding database record (files not tracked in DB)
-4. **Orphaned Users**: Users with no assets (accumulated guest accounts, with optional age-based filtering)
+2. **Orphaned VocabularyItems**: Records referencing non-existent assets
+3. **Orphaned Assets**: Asset records with missing storage files (files deleted but DB records remain)
+4. **Orphaned Files**: Storage files with no corresponding database record (files not tracked in DB)
+5. **Orphaned Users**: Users with no assets (accumulated guest accounts, with optional age-based filtering)
 
 **Usage**:
 ```bash
@@ -442,9 +451,10 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 
 **Cleanup Order** (maintains referential integrity):
 1. SubtitleTracks (no dependencies)
-2. Assets (cascade to tracks)
-3. Files (no DB dependencies)
-4. Users (cascade to assets, but assets already verified)
+2. VocabularyItems (no dependencies)
+3. Assets (cascade to tracks)
+4. Files (no DB dependencies)
+5. Users (cascade to assets, but assets already verified)
 
 **Safety Features**:
 - Default dry-run mode requires explicit `--force` for actual deletions
@@ -524,6 +534,26 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
   cached_title: str,
   cached_thumbnail: Optional[str],
   added_at: DateTime,
+}
+```
+
+#### VocabularyItem
+```python
+{
+  id: UUID,  # Primary key
+  asset_id: UUID,  # FK -> Asset.id
+  word: str,  # Dictionary form
+  reading: str,
+  surface_form: str,
+  jlpt_level: Optional[str],  # N1..N5, Business
+  part_of_speech: str,
+  meaning_cn: str,
+  meaning_en: Optional[str],
+  learning_note: Optional[str],
+  start_time: float,
+  end_time: float,
+  context_sentence: str,
+  created_at: DateTime,
 }
 ```
 
@@ -684,7 +714,10 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 - **Subtitle Calibration**: Character-level timestamp interpolation for precise alignment
 - **Similarity Checking**: Validates user-provided subtitles against generated ones
 - **Video ID Hashing**: Uploaded files get hashed video IDs for uniqueness
-- **YouTube Player Sizing**: Frontend CSS enforces a 16:9 aspect ratio and iframe fill for `#youtube-player` to avoid collapsed embed height.
+- **YouTube Player Sizing**: Frontend CSS clamps `#youtube-player` height to keep subtitles visible; player iframes fill the container, and ArtPlayer video mode uses container height (audio-only still 60px).
+- **Play Page Layout**: Play page route wrappers include `min-h-0` so the grid stays constrained to viewport height; vocabulary/sidebar lists scroll instead of stretching subtitles; subtitle spacing is tightened to avoid scroll.
+- **Vocabulary Filters**: Sidebar filters show only `全部`, `N1`, `N2`, and `商务` (N3/N4/N5 hidden).
+- **Vocabulary Extraction**: After processing Japanese subtitles, Gemini extracts vocabulary and stores `VocabularyItem` rows; asset deletion removes vocabulary, and cleanup script prunes orphaned items.
 - **Play Page State**: Play-page loads reset playback/segment state; word highlighting respects per-asset `has_word_timestamps`; router init waits for API base URL resolution to avoid failed direct loads; UI rendering is gated on API/route readiness to avoid transient modal flashes; health check only updates the status indicator.
 - **Playlists**: Play page supports a playlist sidebar when `playlist_id` is present in the hash query; admin panel exposes playlist CRUD + item management with ordered positions and asset search, and playlist titles link to the first item for quick playback. Playlist owns `PlaylistAsset` via `Playlist.items` with `delete-orphan` so removing from the playlist (or deleting the playlist) deletes items. `Asset.playlist_items` uses ORM cascade `all, delete` (no `delete-orphan`) so deleting an asset through the ORM also cleans playlist items; treat this collection as read-only and avoid mutating it directly (code comment in `backend/db/models.py`). DB-level `ondelete="CASCADE"` remains as a safety net for non-ORM deletes.
 - **Playlist Ordering**: Position normalization shifts items to a temporary offset based on current max position plus a padding constant (`POSITION_OFFSET_PADDING`) to avoid unique constraint collisions before rewriting positions to contiguous indices.

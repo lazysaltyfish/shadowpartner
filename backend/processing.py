@@ -14,7 +14,12 @@ from typing import Dict, List, Optional
 import services_registry as services
 import state
 from db import get_session
-from db.crud import get_asset_by_identifier, get_cached_result
+from db.crud import (
+    create_vocabulary_items,
+    delete_vocabulary_by_asset,
+    get_asset_by_identifier,
+    get_cached_result,
+)
 from db.models import Asset, AssetType, SubtitleSource, SubtitleTrack, SubtitleTrackType
 from models import ProcessingMetrics, Segment, TaskStatus, VideoResponse, Word
 from services.video_utils import build_thumbnail_storage_path, generate_thumbnail, get_video_source
@@ -339,6 +344,67 @@ def save_subtitle_to_db(
 
         logger.info(f"Saved subtitle track to DB for asset_id: {asset.id}")
         return asset.id
+
+
+async def analyze_and_save_vocabulary(
+    asset_id: uuid.UUID,
+    segments: List[Segment],
+    detected_language: Optional[str] = None,
+):
+    """Analyze subtitles and save vocabulary items to database.
+
+    Args:
+        asset_id: Asset UUID
+        segments: Processed subtitle segments
+        detected_language: Detected language code (only process if Japanese)
+    """
+    # Skip if not Japanese content
+    if detected_language and detected_language != "ja":
+        logger.info(f"Skipping vocabulary analysis for non-Japanese content: {detected_language}")
+        return
+
+    # Skip if vocabulary analyzer not available
+    if not services.vocabulary_analyzer or not services.vocabulary_analyzer.available:
+        logger.warning("Vocabulary analyzer not available. Skipping vocabulary analysis.")
+        return
+
+    try:
+        logger.info(f"Starting vocabulary analysis for asset_id: {asset_id}")
+
+        # Prepare segments for analysis (convert to dict format)
+        segments_for_analysis = []
+        for seg in segments:
+            words_text = "".join([w.text for w in seg.words])
+            segments_for_analysis.append(
+                {
+                    "start": seg.start,
+                    "end": seg.end,
+                    "text": words_text,
+                    "words": [w.model_dump() for w in seg.words],
+                }
+            )
+
+        # Run vocabulary analysis in thread to avoid blocking
+        vocab_data = await run_cpu_bound(
+            services.vocabulary_analyzer.analyze,
+            segments_for_analysis,
+        )
+
+        if vocab_data:
+            # Save to database
+            with get_session() as db:
+                # Delete old vocabulary items if any
+                delete_vocabulary_by_asset(db, asset_id)
+                # Create new vocabulary items
+                create_vocabulary_items(db, asset_id, vocab_data)
+
+            logger.info(f"Saved {len(vocab_data)} vocabulary items for asset_id: {asset_id}")
+        else:
+            logger.info(f"No vocabulary items extracted for asset_id: {asset_id}")
+
+    except Exception as e:
+        # Don't fail the entire process if vocabulary analysis fails
+        logger.error(f"Vocabulary analysis failed for asset_id {asset_id}: {e}", exc_info=True)
 
 
 async def process_audio_task(
@@ -666,6 +732,9 @@ async def process_audio_task(
                 is_admin_upload=is_admin_upload,
             )
             final_response.asset_id = str(asset_id)
+
+            # Analyze and save vocabulary (non-blocking)
+            await analyze_and_save_vocabulary(asset_id, final_segments, detected_language)
         except Exception:
             if storage_path and storage is not None:
                 try:

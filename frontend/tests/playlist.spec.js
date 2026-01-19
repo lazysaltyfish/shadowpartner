@@ -192,9 +192,9 @@ test.describe('Play Page Playlist Sidebar', () => {
 
     await page.goto(`/#/play/${assetId}?playlist_id=${playlistId}`);
 
-    await expect(page.getByText('Playlist', { exact: true })).toBeVisible();
-    // Target the heading in the sidebar specifically, not the breadcrumb
-    await expect(page.locator('aside h3:has-text("Test Playlist")')).toBeVisible();
+    // Check for the new tabbed sidebar with "播放列表" (Playlist in Chinese)
+    await expect(page.locator('aside:has-text("播放列表")')).toBeVisible();
+    // Check that playlist items are visible
     await expect(page.locator('text=Lesson 2')).toBeVisible();
   });
 });

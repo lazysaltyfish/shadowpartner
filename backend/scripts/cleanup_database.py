@@ -3,6 +3,7 @@
 
 Detects and removes orphaned records and files:
 - Orphaned SubtitleTracks (referencing non-existent assets)
+- Orphaned VocabularyItems (referencing non-existent assets)
 - Orphaned Assets (storage files missing)
 - Orphaned Files (storage files without database records)
 - Orphaned Users (no assets, optional age-based filtering)
@@ -29,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import services_registry
 from db.engine import SessionLocal
-from db.models import Asset, AssetType, SubtitleTrack, User
+from db.models import Asset, AssetType, SubtitleTrack, User, VocabularyItem
 from settings import get_settings
 from utils.logger import get_logger
 
@@ -241,6 +242,63 @@ def detect_orphaned_users(session: SessionLocal, age_threshold_days: int = 30) -
     return orphaned_users
 
 
+def detect_orphaned_vocabulary(session: SessionLocal) -> List[VocabularyItem]:
+    """Find vocabulary items that reference non-existent assets.
+
+    This is a clear referential integrity violation and always safe to delete.
+
+    Args:
+        session: Database session
+
+    Returns:
+        List of orphaned vocabulary items
+    """
+    all_vocab = session.query(VocabularyItem).all()
+    orphaned_vocab = []
+
+    for vocab in all_vocab:
+        asset = session.get(Asset, vocab.asset_id)
+        if asset is None:
+            orphaned_vocab.append(vocab)
+
+    return orphaned_vocab
+
+
+def cleanup_orphaned_vocabulary(
+    session: SessionLocal, vocab_items: List[VocabularyItem], dry_run: bool
+) -> int:
+    """Clean up orphaned vocabulary items.
+
+    Args:
+        session: Database session
+        vocab_items: List of orphaned vocabulary items to delete
+        dry_run: If True, only report what would be deleted
+
+    Returns:
+        Number of vocabulary items deleted (or would be deleted in dry-run mode)
+    """
+    count = 0
+    for vocab in vocab_items:
+        if dry_run:
+            logger.info(
+                f"[DRY-RUN] Would delete orphaned vocabulary: "
+                f"{vocab.id} (word={vocab.word}, asset_id={vocab.asset_id})"
+            )
+        else:
+            logger.info(
+                f"Deleting orphaned vocabulary: {vocab.id} "
+                f"(word={vocab.word}, asset_id={vocab.asset_id})"
+            )
+            session.delete(vocab)
+        count += 1
+
+    if not dry_run and count > 0:
+        session.commit()
+        logger.info(f"Deleted {count} orphaned vocabulary items")
+
+    return count
+
+
 def cleanup_orphaned_tracks(
     session: SessionLocal, tracks: List[SubtitleTrack], dry_run: bool
 ) -> int:
@@ -397,6 +455,7 @@ async def main():
     try:
         results = {
             "orphaned_tracks": 0,
+            "orphaned_vocabulary": 0,
             "orphaned_assets": 0,
             "orphaned_files": 0,
             "orphaned_users": 0,
@@ -416,9 +475,23 @@ async def main():
             session, orphaned_tracks, dry_run=args.dry_run
         )
 
-        # Step 2: Detect and cleanup orphaned assets
+        # Step 2: Detect and cleanup orphaned vocabulary items
         logger.info("=" * 60)
-        logger.info("Step 2: Detecting orphaned assets (missing files)...")
+        logger.info("Step 2: Detecting orphaned vocabulary items...")
+        orphaned_vocab = detect_orphaned_vocabulary(session)
+        logger.info(f"Found {len(orphaned_vocab)} orphaned vocabulary items")
+
+        if args.verbose and orphaned_vocab:
+            for vocab in orphaned_vocab:
+                logger.info(f"  - Vocab {vocab.id}: word={vocab.word}, asset_id={vocab.asset_id}")
+
+        results["orphaned_vocabulary"] = cleanup_orphaned_vocabulary(
+            session, orphaned_vocab, dry_run=args.dry_run
+        )
+
+        # Step 3: Detect and cleanup orphaned assets
+        logger.info("=" * 60)
+        logger.info("Step 3: Detecting orphaned assets (missing files)...")
         orphaned_assets = await detect_orphaned_assets(session)
         logger.info(f"Found {len(orphaned_assets)} orphaned assets")
 
@@ -434,10 +507,10 @@ async def main():
             session, orphaned_assets, dry_run=args.dry_run
         )
 
-        # Step 3: Detect and cleanup orphaned files (optional)
+        # Step 4: Detect and cleanup orphaned files (optional)
         if args.cleanup_orphaned_files:
             logger.info("=" * 60)
-            logger.info("Step 3: Detecting orphaned storage files...")
+            logger.info("Step 4: Detecting orphaned storage files...")
             orphaned_files = await detect_orphaned_files(session)
             logger.info(f"Found {len(orphaned_files)} orphaned files")
 
@@ -451,14 +524,14 @@ async def main():
         else:
             logger.info("=" * 60)
             logger.info(
-                "Step 3: Skipping orphaned file detection (use --cleanup-orphaned-files to enable)"
+                "Step 4: Skipping orphaned file detection (use --cleanup-orphaned-files to enable)"
             )
 
-        # Step 4: Detect and cleanup orphaned users (optional)
+        # Step 5: Detect and cleanup orphaned users (optional)
         if args.cleanup_orphaned_users:
             logger.info("=" * 60)
             logger.info(
-                f"Step 4: Detecting orphaned users (older than {args.user_age_threshold} days)..."
+                f"Step 5: Detecting orphaned users (older than {args.user_age_threshold} days)..."
             )
             orphaned_users = detect_orphaned_users(
                 session, age_threshold_days=args.user_age_threshold
@@ -479,7 +552,7 @@ async def main():
         else:
             logger.info("=" * 60)
             logger.info(
-                "Step 4: Skipping orphaned user detection (use --cleanup-orphaned-users to enable)"
+                "Step 5: Skipping orphaned user detection (use --cleanup-orphaned-users to enable)"
             )
 
         # Print summary
@@ -488,6 +561,7 @@ async def main():
         logger.info("=" * 60)
         logger.info(f"Mode: {'FORCE (executed)' if args.force else 'DRY-RUN (preview)'}")
         logger.info(f"Orphaned subtitle tracks deleted: {results['orphaned_tracks']}")
+        logger.info(f"Orphaned vocabulary items deleted: {results['orphaned_vocabulary']}")
         logger.info(f"Orphaned assets deleted: {results['orphaned_assets']}")
         logger.info(f"Orphaned files deleted: {results['orphaned_files']}")
         logger.info(f"Orphaned users deleted: {results['orphaned_users']}")

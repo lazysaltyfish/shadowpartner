@@ -30,6 +30,8 @@ from db.crud import (
     get_asset_by_identifier,
     get_or_create_guest_user,
     get_subtitle_track_by_asset,
+    get_vocabulary_by_asset,
+    get_vocabulary_stats,
 )
 from db.models import Asset, AssetType, SubtitleTrack, SubtitleTrackType
 from models import (
@@ -898,3 +900,71 @@ async def stream_asset(request: Request, asset_id: str):
             "Content-Length": str(file_size),
         },
     )
+
+
+# ==================== Vocabulary API ====================
+
+
+@router.get("/api/assets/{asset_id}/vocabulary")
+@limiter.limit("60/minute")
+async def get_asset_vocabulary(
+    request: Request,
+    asset_id: str,
+    jlpt_level: Optional[str] = None,
+):
+    """Get vocabulary items for an asset.
+
+    Args:
+        asset_id: Asset UUID
+        jlpt_level: Optional JLPT level filter (N1, N2, N3, N4, N5, Business)
+
+    Returns:
+        Vocabulary items with statistics
+    """
+    try:
+        asset_uuid = uuid.UUID(asset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+
+    with get_session() as db:
+        asset = get_asset_by_id(db, asset_uuid)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        # Validate jlpt_level if provided
+        valid_levels = {"N1", "N2", "N3", "N4", "N5", "Business"}
+        if jlpt_level and jlpt_level not in valid_levels:
+            raise HTTPException(status_code=400, detail="Invalid JLPT level")
+
+        # Get vocabulary items
+        vocab_items = get_vocabulary_by_asset(db, asset_uuid, jlpt_level)
+
+        # Get statistics
+        stats = get_vocabulary_stats(db, asset_uuid)
+
+        # Format response
+        items = []
+        for item in vocab_items:
+            items.append(
+                {
+                    "id": str(item.id),
+                    "word": item.word,
+                    "reading": item.reading,
+                    "surface_form": item.surface_form,
+                    "jlpt_level": item.jlpt_level,
+                    "part_of_speech": item.part_of_speech,
+                    "meaning_cn": item.meaning_cn,
+                    "meaning_en": item.meaning_en,
+                    "learning_note": item.learning_note,
+                    "start_time": item.start_time,
+                    "end_time": item.end_time,
+                    "context_sentence": item.context_sentence,
+                }
+            )
+
+        return {
+            "asset_id": asset_id,
+            "total_count": len(items),
+            "items": items,
+            "stats": stats,
+        }

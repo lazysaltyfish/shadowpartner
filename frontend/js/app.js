@@ -151,6 +151,25 @@ createApp({
             cleanupPolling
         } = useFileUpload({ apiBaseUrl, fetchWithAuth, showToast });
 
+        // Vocabulary learning module
+        const {
+            vocabulary,
+            vocabularyStats,
+            vocabularyLoading,
+            vocabularyError,
+            selectedJlptLevel,
+            searchQuery,
+            filteredVocabulary,
+            vocabularyCount,
+            availableLevels,
+            hasVocabulary,
+            jlptLevels,
+            getJlptBadgeClass,
+            formatTimestamp,
+            loadVocabulary,
+            resetVocabulary
+        } = useVocabulary({ apiBaseUrl });
+
         // ========================================================================
         // UPLOAD HANDLER - Wrap processVideo with completion logic
         // ========================================================================
@@ -223,6 +242,7 @@ createApp({
         const playPageError = ref(null);
         const playlistContext = ref(null);
         const playlistContextLoading = ref(false);
+        const sidebarTab = ref(null); // 'playlist' | 'vocabulary' | null
 
         // Navigation context for Play page
         const navigationContext = reactive({
@@ -726,6 +746,9 @@ createApp({
                 playPageData.value = data;
                 playPageLoading.value = false;
 
+                // Load vocabulary for this asset
+                loadVocabulary(assetId);
+
                 nextTick(() => {
                     console.log('[loadPlayPage] nextTick callback executing');
                     const container = document.getElementById('youtube-player');
@@ -887,6 +910,20 @@ createApp({
             }
         });
 
+        // Auto-set sidebar tab based on available content
+        watch([playlistContext, hasVocabulary], ([playlist, vocab]) => {
+            if (playlist && vocab) {
+                // Both available: default to vocabulary tab
+                sidebarTab.value = 'vocabulary';
+            } else if (playlist) {
+                sidebarTab.value = 'playlist';
+            } else if (vocab) {
+                sidebarTab.value = 'vocabulary';
+            } else {
+                sidebarTab.value = null;
+            }
+        }, { immediate: true });
+
         // ========================================================================
         // RETURN - Export all state and methods to template
         // ========================================================================
@@ -946,6 +983,7 @@ createApp({
             playPageError,
             playlistContext,
             playlistContextLoading,
+            sidebarTab,
             playPageVisibleSegments,
             playPageHasWordTimestamps,
             goHome: () => Router.goHome(),
@@ -1022,6 +1060,21 @@ createApp({
             adminAddPlaylistAsset,
             adminMovePlaylistItem,
             adminRemovePlaylistItem,
+
+            // Vocabulary learning
+            vocabulary,
+            vocabularyStats,
+            vocabularyLoading,
+            vocabularyError,
+            selectedJlptLevel,
+            searchQuery,
+            filteredVocabulary,
+            vocabularyCount,
+            availableLevels,
+            hasVocabulary,
+            jlptLevels,
+            getJlptBadgeClass,
+            formatTimestamp,
 
             // Toast notification system
             toasts,

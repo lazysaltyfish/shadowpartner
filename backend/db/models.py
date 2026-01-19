@@ -156,3 +156,37 @@ class PlaylistAsset(SQLModel, table=True):
         UniqueConstraint("playlist_id", "position", name="uq_playlist_position"),
         Index("ix_playlist_assets_position", "playlist_id", "position"),
     )
+
+
+class VocabularyItem(SQLModel, table=True):
+    __tablename__ = "vocabulary_item"  # type: ignore[reportAssignmentType]
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Relationships
+    asset_id: uuid.UUID = Field(foreign_key="asset.id", index=True)
+
+    # Word information
+    word: str = Field(index=True, max_length=255)  # Dictionary form (e.g., 食べる)
+    reading: str = Field(max_length=255)  # Hiragana (e.g., たべる)
+    surface_form: str = Field(max_length=255)  # Original in subtitle (e.g., 食べました)
+
+    # Learning attributes
+    jlpt_level: Optional[str] = Field(
+        default=None, index=True, max_length=20
+    )  # N1, N2, N3, N4, N5, Business
+    part_of_speech: str = Field(max_length=100)  # Noun, Verb, Idiom, etc.
+
+    # Translations & notes
+    meaning_cn: str = Field(max_length=500)  # Chinese definition
+    meaning_en: Optional[str] = Field(default=None, max_length=500)  # English definition
+    learning_note: Optional[str] = Field(default=None, max_length=1000)
+
+    # Context
+    start_time: float  # Position in video (seconds)
+    end_time: float
+    context_sentence: str = Field(max_length=2000)
+
+    # Indexes
+    __table_args__ = (Index("ix_vocabulary_asset_jlpt", "asset_id", "jlpt_level"),)

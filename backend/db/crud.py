@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement
 
 import services_registry
-from db.models import Asset, AssetType, SubtitleTrack, SubtitleTrackType, User
+from db.models import (
+    Asset,
+    AssetType,
+    SubtitleTrack,
+    SubtitleTrackType,
+    User,
+    VocabularyItem,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -240,7 +247,7 @@ def get_asset_with_tracks(session: Session, asset_id: uuid.UUID) -> Optional[Ass
 
 
 async def delete_asset(session: Session, asset_id: uuid.UUID) -> bool:
-    """Delete asset and all associated subtitle tracks and storage files.
+    """Delete asset and all associated subtitle tracks, vocabulary, and storage files.
 
     Args:
         session: Database session
@@ -258,6 +265,9 @@ async def delete_asset(session: Session, asset_id: uuid.UUID) -> bool:
     thumbnail_path = None
     if asset.meta:
         thumbnail_path = asset.meta.get("thumbnail_path")
+
+    # Delete vocabulary items explicitly (before asset deletion)
+    delete_vocabulary_by_asset(session, asset_id)
 
     # Delete asset (cascade will handle subtitle_tracks)
     session.delete(asset)
@@ -352,3 +362,120 @@ def update_asset_meta(session: Session, asset_id: uuid.UUID, meta_updates: dict)
     session.commit()
     session.refresh(asset)
     return asset
+
+
+# ==================== Vocabulary CRUD ====================
+
+
+def get_vocabulary_by_asset(
+    session: Session,
+    asset_id: uuid.UUID,
+    jlpt_level: Optional[str] = None,
+    limit: int = 1000,
+) -> List[VocabularyItem]:
+    """Get vocabulary items for an asset.
+
+    Args:
+        session: Database session
+        asset_id: Asset UUID
+        jlpt_level: Optional JLPT level filter (N1, N2, N3, N4, N5, Business)
+        limit: Maximum number of items to return
+
+    Returns:
+        List of VocabularyItem objects ordered by start_time
+    """
+    query = session.query(VocabularyItem).filter(_as_clause(VocabularyItem.asset_id == asset_id))
+
+    if jlpt_level:
+        query = query.filter(_as_clause(VocabularyItem.jlpt_level == jlpt_level))
+
+    return query.order_by(VocabularyItem.start_time).limit(limit).all()
+
+
+def get_vocabulary_stats(session: Session, asset_id: uuid.UUID) -> dict[str, int]:
+    """Get vocabulary statistics for an asset.
+
+    Args:
+        session: Database session
+        asset_id: Asset UUID
+
+    Returns:
+        Dictionary with counts per JLPT level
+    """
+    items = get_vocabulary_by_asset(session, asset_id, limit=10000)
+    stats: dict[str, int] = {
+        "N1": 0,
+        "N2": 0,
+        "N3": 0,
+        "N4": 0,
+        "N5": 0,
+        "Business": 0,
+        "Other": 0,
+    }
+    for item in items:
+        level = item.jlpt_level or "Other"
+        if level in stats:
+            stats[level] += 1
+        else:
+            stats["Other"] += 1
+    return stats
+
+
+def create_vocabulary_items(
+    session: Session, asset_id: uuid.UUID, vocab_data: List[dict]
+) -> List[VocabularyItem]:
+    """Create vocabulary items for an asset.
+
+    Args:
+        session: Database session
+        asset_id: Asset UUID
+        vocab_data: List of vocabulary data dictionaries from AI analysis
+
+    Returns:
+        List of created VocabularyItem objects
+    """
+    items = []
+    for data in vocab_data:
+        item = VocabularyItem(
+            asset_id=asset_id,
+            word=data.get("word", ""),
+            reading=data.get("reading", ""),
+            surface_form=data.get("word", ""),  # Fallback to word if surface_form not provided
+            jlpt_level=data.get("jlpt_level"),
+            part_of_speech=data.get("part_of_speech", ""),
+            meaning_cn=data.get("meaning_cn", ""),
+            meaning_en=data.get("meaning_en"),
+            learning_note=data.get("learning_note"),
+            start_time=data.get("start_time", 0.0),
+            end_time=data.get("end_time", 0.0),
+            context_sentence=data.get("original_sentence", ""),
+        )
+        session.add(item)
+        items.append(item)
+
+    session.commit()
+    for item in items:
+        session.refresh(item)
+
+    logger.info(f"Created {len(items)} vocabulary items for asset {asset_id}")
+    return items
+
+
+def delete_vocabulary_by_asset(session: Session, asset_id: uuid.UUID) -> int:
+    """Delete all vocabulary items for an asset.
+
+    Args:
+        session: Database session
+        asset_id: Asset UUID
+
+    Returns:
+        Number of deleted items
+    """
+    count = (
+        session.query(VocabularyItem)
+        .filter(_as_clause(VocabularyItem.asset_id == asset_id))
+        .delete()
+    )
+    session.commit()
+    logger.info(f"Deleted {count} vocabulary items for asset {asset_id}")
+    return count

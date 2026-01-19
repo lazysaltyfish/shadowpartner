@@ -50,10 +50,10 @@ ruby rt {
   transition: color 0.1s ease;
 }
 
-/* Keep YouTube embeds at a stable 16:9 size */
+/* Keep YouTube embeds compact to prioritize subtitle space */
 #youtube-player {
   width: 100%;
-  aspect-ratio: 16 / 9;
+  height: clamp(180px, 32vh, 360px);
   background-color: #000;
 }
 

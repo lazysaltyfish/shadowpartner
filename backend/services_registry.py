@@ -11,6 +11,7 @@ from services.storage.local import LocalStorage
 from services.subtitle_linearizer import SubtitleLinearizer
 from services.transcriber import AudioTranscriber
 from services.translator import Translator
+from services.vocabulary_analyzer import VocabularyAnalyzer
 from settings import get_settings
 from utils.logger import get_logger
 
@@ -25,6 +26,7 @@ analyzer: Optional[JapaneseAnalyzer] = None
 aligner: Optional[Aligner] = None
 translator: Optional[Translator] = None
 subtitle_linearizer: Optional[SubtitleLinearizer] = None
+vocabulary_analyzer: Optional[VocabularyAnalyzer] = None
 storage: Optional[BaseStorage] = None
 whisper_lock: Optional[asyncio.Semaphore] = None
 whisper_lock_label = "transcription"
@@ -37,6 +39,7 @@ def init_services():
     global aligner
     global translator
     global subtitle_linearizer
+    global vocabulary_analyzer
     global storage
     global whisper_lock
     global whisper_lock_label
@@ -57,6 +60,7 @@ def init_services():
         aligner = Aligner()
         translator = Translator()
         subtitle_linearizer = SubtitleLinearizer()
+        vocabulary_analyzer = VocabularyAnalyzer()
         storage = LocalStorage(root_dir=settings.storage_root_dir)
         logger.info(f"Local storage initialized: {settings.storage_root_dir}")
         whisper_lock = asyncio.Semaphore(1)
@@ -76,3 +80,5 @@ def init_services():
 def set_executor(executor):
     if translator:
         translator.set_executor(executor)
+    if vocabulary_analyzer:
+        vocabulary_analyzer.set_executor(executor)

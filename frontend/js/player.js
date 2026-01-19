@@ -89,8 +89,7 @@ const PlayerManager = {
         artContainer.className = 'artplayer-app';
         artContainer.style.width = '100%';
         // Set initial height to prevent black screen
-        const containerWidth = container.clientWidth || 640;
-        artContainer.style.height = `${containerWidth / (16 / 9)}px`;
+        artContainer.style.height = '100%';
         container.appendChild(artContainer);
 
         const art = new Artplayer({
@@ -113,7 +112,6 @@ const PlayerManager = {
         // Handle aspect ratio and audio-only mode
         art.on('video:loadedmetadata', () => {
             const video = art.video;
-            const containerWidth = container.clientWidth;
             const isAudioOnly = video.videoWidth === 0 || video.videoHeight === 0;
 
             if (isAudioOnly) {
@@ -137,12 +135,12 @@ const PlayerManager = {
 
                 console.log('[PlayerManager] Audio-only mode enabled');
             } else {
-                // Video: use 16:9 aspect ratio
+                // Video: use the container's compact height
                 artContainer.classList.remove('artplayer-audio-only');
                 container.style.height = '';
                 container.style.minHeight = '';
                 container.style.maxHeight = '';
-                artContainer.style.height = `${containerWidth / (16 / 9)}px`;
+                artContainer.style.height = '100%';
                 artContainer.style.minHeight = '';
                 artContainer.style.maxHeight = '';
 
