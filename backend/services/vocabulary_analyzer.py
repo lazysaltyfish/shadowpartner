@@ -49,6 +49,7 @@ do not include conversational text.
 
 Each item should have:
 - word: dictionary form (基本形)
+- surface_form: original form as it appears in subtitle (文中形式)
 - reading: hiragana reading
 - part_of_speech: Noun/Verb/Keigo/Idiom/Suru-verb/etc
 - jlpt_level: "N1", "N2", "N3", "N4", "N5", or "Business"
@@ -69,6 +70,7 @@ Output:
 [
   {{
     "word": "承諾",
+    "surface_form": "承諾された",
     "reading": "しょうだく",
     "part_of_speech": "Noun / Suru-verb",
     "jlpt_level": "N1",
@@ -80,6 +82,7 @@ Output:
   }},
   {{
     "word": "耳を疑う",
+    "surface_form": "耳を疑いました",
     "reading": "みみをうたがう",
     "part_of_speech": "Idiom",
     "jlpt_level": "N2",
@@ -91,6 +94,7 @@ Output:
   }},
   {{
     "word": "根回し",
+    "surface_form": "根回し",
     "reading": "ねまわし",
     "part_of_speech": "Noun",
     "jlpt_level": "Business",
@@ -120,13 +124,18 @@ class VocabularyAnalyzer:
         settings = get_settings()
         api_key = settings.gemini_api_key
 
+        # Set timeout before creating client so it can be used in client config
+        self.request_timeout_seconds = 120  # Longer timeout for analysis
+
         self.client = None
         if api_key:
-            self.client = genai.Client(api_key=api_key)
+            self.client = genai.Client(
+                api_key=api_key,
+                http_options={"timeout": self.request_timeout_seconds},
+            )
         self.available = bool(api_key)
         self.model_id = settings.gemini_model_id
         self.executor = executor
-        self.request_timeout_seconds = 120  # Longer timeout for analysis
         logger.info(f"VocabularyAnalyzer initialized with model: {self.model_id}")
 
     def set_executor(self, executor: Optional[ThreadPoolExecutor]) -> None:
@@ -206,20 +215,42 @@ class VocabularyAnalyzer:
     def _parse_timestamp(self, timestamp_str: str) -> float:
         """Parse timestamp string to seconds.
 
+        Supports formats:
+        - MM:SS or M:SS (e.g., "04:20", "4:20")
+        - MM:SS.sss or M:SS.sss (e.g., "04:20.5", "4:20.500")
+        - HH:MM:SS or H:M:SS (e.g., "01:04:20")
+        - HH:MM:SS.sss (e.g., "01:04:20.5")
+
         Args:
-            timestamp_str: Timestamp in MM:SS or HH:MM:SS format.
+            timestamp_str: Timestamp string from AI response.
 
         Returns:
-            Time in seconds.
+            Time in seconds, or 0.0 if parsing fails.
         """
-        parts = timestamp_str.split(":")
-        if len(parts) == 2:
-            minutes, seconds = parts
-            return int(minutes) * 60 + int(seconds)
-        elif len(parts) == 3:
-            hours, minutes, seconds = parts
-            return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
-        return 0.0
+        try:
+            # Clean the input - remove any whitespace
+            timestamp_str = timestamp_str.strip()
+
+            # Split by colon
+            parts = timestamp_str.split(":")
+
+            if len(parts) == 2:
+                # MM:SS format
+                minutes = float(parts[0])
+                seconds = float(parts[1])
+                return minutes * 60 + seconds
+            elif len(parts) == 3:
+                # HH:MM:SS format
+                hours = float(parts[0])
+                minutes = float(parts[1])
+                seconds = float(parts[2])
+                return hours * 3600 + minutes * 60 + seconds
+
+            logger.warning(f"Unrecognized timestamp format: {timestamp_str}")
+            return 0.0
+        except (ValueError, IndexError) as e:
+            logger.error(f"Failed to parse timestamp '{timestamp_str}': {e}")
+            return 0.0
 
     def analyze(self, segments: List[dict]) -> List[dict]:
         """Analyze subtitle segments to extract vocabulary.

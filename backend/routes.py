@@ -910,13 +910,11 @@ async def stream_asset(request: Request, asset_id: str):
 async def get_asset_vocabulary(
     request: Request,
     asset_id: str,
-    jlpt_level: Optional[str] = None,
 ):
     """Get vocabulary items for an asset.
 
     Args:
         asset_id: Asset UUID
-        jlpt_level: Optional JLPT level filter (N1, N2, N3, N4, N5, Business)
 
     Returns:
         Vocabulary items with statistics
@@ -931,13 +929,8 @@ async def get_asset_vocabulary(
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        # Validate jlpt_level if provided
-        valid_levels = {"N1", "N2", "N3", "N4", "N5", "Business"}
-        if jlpt_level and jlpt_level not in valid_levels:
-            raise HTTPException(status_code=400, detail="Invalid JLPT level")
-
-        # Get vocabulary items
-        vocab_items = get_vocabulary_by_asset(db, asset_uuid, jlpt_level)
+        # Get all vocabulary items
+        vocab_items = get_vocabulary_by_asset(db, asset_uuid)
 
         # Get statistics
         stats = get_vocabulary_stats(db, asset_uuid)

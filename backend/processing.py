@@ -385,6 +385,7 @@ async def analyze_and_save_vocabulary(
             )
 
         # Run vocabulary analysis in thread to avoid blocking
+        # Note: Timeout is configured at the client level (http_options)
         vocab_data = await run_cpu_bound(
             services.vocabulary_analyzer.analyze,
             segments_for_analysis,

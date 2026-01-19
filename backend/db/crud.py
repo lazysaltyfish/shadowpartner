@@ -370,7 +370,6 @@ def update_asset_meta(session: Session, asset_id: uuid.UUID, meta_updates: dict)
 def get_vocabulary_by_asset(
     session: Session,
     asset_id: uuid.UUID,
-    jlpt_level: Optional[str] = None,
     limit: int = 1000,
 ) -> List[VocabularyItem]:
     """Get vocabulary items for an asset.
@@ -378,17 +377,12 @@ def get_vocabulary_by_asset(
     Args:
         session: Database session
         asset_id: Asset UUID
-        jlpt_level: Optional JLPT level filter (N1, N2, N3, N4, N5, Business)
         limit: Maximum number of items to return
 
     Returns:
         List of VocabularyItem objects ordered by start_time
     """
     query = session.query(VocabularyItem).filter(_as_clause(VocabularyItem.asset_id == asset_id))
-
-    if jlpt_level:
-        query = query.filter(_as_clause(VocabularyItem.jlpt_level == jlpt_level))
-
     return query.order_by(VocabularyItem.start_time).limit(limit).all()
 
 
@@ -440,7 +434,7 @@ def create_vocabulary_items(
             asset_id=asset_id,
             word=data.get("word", ""),
             reading=data.get("reading", ""),
-            surface_form=data.get("word", ""),  # Fallback to word if surface_form not provided
+            surface_form=data.get("surface_form") or data.get("word", ""),
             jlpt_level=data.get("jlpt_level"),
             part_of_speech=data.get("part_of_speech", ""),
             meaning_cn=data.get("meaning_cn", ""),
