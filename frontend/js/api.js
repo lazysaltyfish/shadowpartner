@@ -45,6 +45,27 @@ const API = {
     },
 
     /**
+     * Build request headers with session IDs
+     * @param {string} sessionId - Session ID to include
+     * @param {object} options - Options object with optional headers
+     * @returns {object} Headers object
+     */
+    buildHeaders(sessionId, options = {}) {
+        const headers = { ...(options.headers || {}) };
+
+        if (sessionId) {
+            headers[this.SESSION_HEADER_NAME] = sessionId;
+        }
+
+        const adminSid = this.getAdminSessionId();
+        if (adminSid) {
+            headers[this.ADMIN_SESSION_HEADER_NAME] = adminSid;
+        }
+
+        return headers;
+    },
+
+    /**
      * Ensure session exists, create if needed
      * @param {boolean} forceRefresh - Force create new session
      * @returns {Promise<string>} Session ID
@@ -82,15 +103,7 @@ const API = {
      */
     async fetchWithAuth(url, options = {}, retryOnAuth = true) {
         const sid = await this.ensureSession();
-        const headers = {
-            ...(options.headers || {}),
-            [this.SESSION_HEADER_NAME]: sid
-        };
-        // Add admin session header if available
-        const adminSid = this.getAdminSessionId();
-        if (adminSid) {
-            headers[this.ADMIN_SESSION_HEADER_NAME] = adminSid;
-        }
+        const headers = this.buildHeaders(sid, options);
         const response = await fetch(url, { ...options, headers, credentials: 'include' });
 
         if (response.status === 401 && retryOnAuth) {
@@ -174,15 +187,9 @@ const API = {
      */
     async processVideo(url) {
         const sid = await this.ensureSession();
-        const headers = {
-            'Content-Type': 'application/json',
-            [this.SESSION_HEADER_NAME]: sid
-        };
-        // Add admin session header if available
-        const adminSid = this.getAdminSessionId();
-        if (adminSid) {
-            headers[this.ADMIN_SESSION_HEADER_NAME] = adminSid;
-        }
+        const headers = this.buildHeaders(sid, {
+            headers: { 'Content-Type': 'application/json' }
+        });
         const response = await fetch(`${this.baseUrl}/api/process`, {
             method: 'POST',
             headers,
@@ -240,10 +247,11 @@ const API = {
         if (!adminSid) {
             throw new Error('Admin session required');
         }
+        const headers = this.buildHeaders(null, {
+            headers: { [this.ADMIN_SESSION_HEADER_NAME]: adminSid }
+        });
         const response = await fetch(`${this.baseUrl}/api/admin/assets/${assetId}/meta`, {
-            headers: {
-                [this.ADMIN_SESSION_HEADER_NAME]: adminSid
-            },
+            headers,
             credentials: 'include'
         });
         if (!response.ok) {
@@ -264,12 +272,15 @@ const API = {
         if (!adminSid) {
             throw new Error('Admin session required');
         }
-        const response = await fetch(`${this.baseUrl}/api/admin/assets/${assetId}/meta`, {
-            method: 'PATCH',
+        const headers = this.buildHeaders(null, {
             headers: {
                 'Content-Type': 'application/json',
                 [this.ADMIN_SESSION_HEADER_NAME]: adminSid
-            },
+            }
+        });
+        const response = await fetch(`${this.baseUrl}/api/admin/assets/${assetId}/meta`, {
+            method: 'PATCH',
+            headers,
             body: JSON.stringify(meta),
             credentials: 'include'
         });

@@ -5,12 +5,10 @@ This module contains all endpoints that are accessible without any session.
 
 from __future__ import annotations
 
-import uuid
 from typing import Any, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import desc, func
-from sqlalchemy.sql import ColumnElement
 
 import services_registry
 import session_manager
@@ -29,14 +27,12 @@ from db.models import Asset, AssetType, SubtitleTrack, SubtitleTrackType
 from models import Segment, SessionResponse, TaskInfo, Word
 from routers.decorators import rate_limit
 from session_manager import AdminSession, get_current_admin_session
+from utils.db_helpers import as_clause
 from utils.logger import get_logger
+from utils.validation import parse_uuid
 
 router = APIRouter(tags=["public"])
 logger = get_logger(__name__)
-
-
-def _as_clause(value: Any) -> ColumnElement[bool]:
-    return cast(ColumnElement[bool], value)
 
 
 def _get_asset_thumbnail_url(request: Request, asset: Asset) -> Optional[str]:
@@ -120,8 +116,8 @@ async def search_assets(
             db.query(Asset, SubtitleTrack)
             .join(SubtitleTrack)
             .filter(
-                _as_clause(SubtitleTrack.track_type == SubtitleTrackType.PROCESSED),
-                _as_clause(cast(Any, SubtitleTrack.is_default).is_(True)),
+                as_clause(SubtitleTrack.track_type == SubtitleTrackType.PROCESSED),
+                as_clause(cast(Any, SubtitleTrack.is_default).is_(True)),
             )
         )
         if search_term:
@@ -134,8 +130,8 @@ async def search_assets(
                 "",
             )
             query = query.filter(
-                _as_clause(func.lower(Asset.identifier).like(search_like))
-                | _as_clause(func.lower(search_title_expr).like(search_like))
+                as_clause(func.lower(Asset.identifier).like(search_like))
+                | as_clause(func.lower(search_title_expr).like(search_like))
             )
         total = query.with_entities(cast(Any, Asset.id)).distinct().count()
         assets = (
@@ -201,10 +197,7 @@ async def get_asset(request: Request, asset_id: str, limit: int = 20, offset: in
             return {"items": items, "total": total}
 
     # Handle single asset request
-    try:
-        asset_uuid = uuid.UUID(asset_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+    asset_uuid = parse_uuid(asset_id, "asset ID")
 
     with get_session() as db:
         asset = get_asset_by_id(db, asset_uuid)
@@ -251,10 +244,7 @@ async def get_asset(request: Request, asset_id: str, limit: int = 20, offset: in
 async def get_asset_thumbnail(request: Request, asset_id: str):
     from fastapi.responses import StreamingResponse
 
-    try:
-        asset_uuid = uuid.UUID(asset_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+    asset_uuid = parse_uuid(asset_id, "asset ID")
 
     with get_session() as db:
         asset = get_asset_by_id(db, asset_uuid)
@@ -305,10 +295,7 @@ async def stream_asset(request: Request, asset_id: str):
 
     from fastapi.responses import StreamingResponse
 
-    try:
-        asset_uuid = uuid.UUID(asset_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+    asset_uuid = parse_uuid(asset_id, "asset ID")
 
     with get_session() as db:
         asset = get_asset_by_id(db, asset_uuid)
@@ -404,10 +391,7 @@ async def get_asset_vocabulary(
     Returns:
         Vocabulary items with statistics
     """
-    try:
-        asset_uuid = uuid.UUID(asset_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+    asset_uuid = parse_uuid(asset_id, "asset ID")
 
     with get_session() as db:
         asset = get_asset_by_id(db, asset_uuid)

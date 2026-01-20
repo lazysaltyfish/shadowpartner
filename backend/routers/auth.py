@@ -10,7 +10,7 @@ import asyncio
 import os
 import time
 import uuid
-from typing import Any, Optional, cast
+from typing import Optional
 
 from fastapi import (
     APIRouter,
@@ -22,7 +22,6 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from sqlalchemy.sql import ColumnElement
 
 import session_manager
 import state
@@ -62,10 +61,6 @@ from validators import (
 
 router = APIRouter(dependencies=[Depends(session_manager.get_current_session)], tags=["auth"])
 logger = get_logger(__name__)
-
-
-def _as_clause(value: Any) -> ColumnElement[bool]:
-    return cast(ColumnElement[bool], value)
 
 
 def _get_asset_thumbnail_url(request: Request, asset: Asset) -> Optional[str]:

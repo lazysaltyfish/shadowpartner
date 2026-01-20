@@ -5,12 +5,10 @@ This module contains endpoints for managing users, assets, and subtitle tracks.
 
 from __future__ import annotations
 
-import uuid
-from typing import Any, List, Optional, cast
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy.sql import ColumnElement
 
 from api_policy import RateLimitTier
 from db import get_session
@@ -31,6 +29,7 @@ from db.models import (
 from routers.decorators import rate_limit
 from session_manager import AdminSession, get_current_admin_session
 from utils.logger import get_logger
+from utils.validation import parse_uuid
 
 router = APIRouter(
     prefix="/api/admin",
@@ -38,10 +37,6 @@ router = APIRouter(
     tags=["admin"],
 )
 logger = get_logger(__name__)
-
-
-def _as_clause(value: Any) -> ColumnElement[bool]:
-    return cast(ColumnElement[bool], value)
 
 
 # ==================== Request/Response Models ====================
@@ -159,10 +154,7 @@ async def delete_user_endpoint(
     Raises:
         HTTPException 404 if user not found
     """
-    try:
-        user_uuid = uuid.UUID(user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid user ID format")
+    user_uuid = parse_uuid(user_id, "user ID")
 
     with get_session() as db:
         if await delete_user(db, user_uuid):
@@ -246,10 +238,7 @@ async def delete_asset_endpoint(
     Raises:
         HTTPException 404 if asset not found
     """
-    try:
-        asset_uuid = uuid.UUID(asset_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+    asset_uuid = parse_uuid(asset_id, "asset ID")
 
     with get_session() as db:
         if await delete_asset(db, asset_uuid):
@@ -276,10 +265,7 @@ async def get_asset_meta(
     Returns:
         AssetMetaResponse with asset metadata
     """
-    try:
-        asset_uuid = uuid.UUID(asset_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+    asset_uuid = parse_uuid(asset_id, "asset ID")
 
     with get_session() as db:
         asset = get_asset_by_id(db, asset_uuid)
@@ -318,10 +304,7 @@ async def update_asset_meta_endpoint(
     Returns:
         Updated AssetMetaResponse
     """
-    try:
-        asset_uuid = uuid.UUID(asset_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+    asset_uuid = parse_uuid(asset_id, "asset ID")
 
     # Build meta updates from data
     meta_updates = {}
@@ -413,10 +396,7 @@ async def delete_subtitle_track_endpoint(
     Raises:
         HTTPException 404 if track not found
     """
-    try:
-        track_uuid = uuid.UUID(track_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid track ID format")
+    track_uuid = parse_uuid(track_id, "track ID")
 
     with get_session() as db:
         if delete_subtitle_track(db, track_uuid):

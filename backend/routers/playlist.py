@@ -7,13 +7,11 @@ This module contains endpoints for managing playlists.
 
 from __future__ import annotations
 
-import uuid
 from typing import Any, List, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import desc, func
-from sqlalchemy.sql import ColumnElement
 
 from api_policy import RateLimitTier
 from db import get_session
@@ -29,7 +27,9 @@ from db.models import (
 )
 from routers.decorators import rate_limit
 from session_manager import AdminSession, get_current_admin_session
+from utils.db_helpers import as_clause
 from utils.logger import get_logger
+from utils.validation import parse_uuid
 
 router = APIRouter(
     prefix="/api/playlists",
@@ -38,10 +38,6 @@ router = APIRouter(
 logger = get_logger(__name__)
 
 POSITION_OFFSET_PADDING = 1000
-
-
-def _as_clause(value: Any) -> ColumnElement[bool]:
-    return cast(ColumnElement[bool], value)
 
 
 # ==================== Request/Response Models ====================
@@ -156,10 +152,7 @@ async def get_playlist(
     request: Request,
     playlist_id: str,
 ):
-    try:
-        playlist_uuid = uuid.UUID(playlist_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+    playlist_uuid = parse_uuid(playlist_id, "playlist ID")
 
     with get_session() as db:
         playlist = db.get(Playlist, playlist_uuid)
@@ -168,7 +161,7 @@ async def get_playlist(
 
         items = (
             db.query(PlaylistAsset)
-            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .filter(as_clause(PlaylistAsset.playlist_id == playlist.id))
             .order_by(cast(Any, PlaylistAsset.position))
             .all()
         )
@@ -242,10 +235,7 @@ async def update_playlist(
     if data.title is not None and not data.title.strip():
         raise HTTPException(status_code=400, detail="Title is required")
 
-    try:
-        playlist_uuid = uuid.UUID(playlist_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+    playlist_uuid = parse_uuid(playlist_id, "playlist ID")
 
     with get_session() as db:
         playlist = db.get(Playlist, playlist_uuid)
@@ -281,10 +271,7 @@ async def delete_playlist(
     playlist_id: str,
     admin_session: AdminSession = Depends(get_current_admin_session),
 ):
-    try:
-        playlist_uuid = uuid.UUID(playlist_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+    playlist_uuid = parse_uuid(playlist_id, "playlist ID")
 
     with get_session() as db:
         playlist = db.get(Playlist, playlist_uuid)
@@ -304,10 +291,7 @@ async def get_playlist_items(
     request: Request,
     playlist_id: str,
 ):
-    try:
-        playlist_uuid = uuid.UUID(playlist_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
+    playlist_uuid = parse_uuid(playlist_id, "playlist ID")
 
     with get_session() as db:
         playlist = db.get(Playlist, playlist_uuid)
@@ -315,7 +299,7 @@ async def get_playlist_items(
             raise HTTPException(status_code=404, detail="Playlist not found")
         items = (
             db.query(PlaylistAsset)
-            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .filter(as_clause(PlaylistAsset.playlist_id == playlist.id))
             .order_by(cast(Any, PlaylistAsset.position))
             .all()
         )
@@ -345,15 +329,8 @@ async def add_playlist_item(
     if data.position is not None and data.position < 0:
         raise HTTPException(status_code=400, detail="Position must be >= 0")
 
-    try:
-        playlist_uuid = uuid.UUID(playlist_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
-
-    try:
-        asset_uuid = uuid.UUID(data.asset_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+    playlist_uuid = parse_uuid(playlist_id, "playlist ID")
+    asset_uuid = parse_uuid(data.asset_id, "asset ID")
 
     with get_session() as db:
         playlist = db.get(Playlist, playlist_uuid)
@@ -372,8 +349,8 @@ async def add_playlist_item(
         existing = (
             db.query(PlaylistAsset)
             .filter(
-                _as_clause(PlaylistAsset.playlist_id == playlist.id),
-                _as_clause(PlaylistAsset.asset_id == asset_uuid),
+                as_clause(PlaylistAsset.playlist_id == playlist.id),
+                as_clause(PlaylistAsset.asset_id == asset_uuid),
             )
             .first()
         )
@@ -382,7 +359,7 @@ async def add_playlist_item(
 
         items = (
             db.query(PlaylistAsset)
-            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .filter(as_clause(PlaylistAsset.playlist_id == playlist.id))
             .order_by(cast(Any, PlaylistAsset.position))
             .all()
         )
@@ -424,15 +401,8 @@ async def set_playlist_item_position(
     if data.position < 0:
         raise HTTPException(status_code=400, detail="Position must be >= 0")
 
-    try:
-        playlist_uuid = uuid.UUID(playlist_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
-
-    try:
-        asset_uuid = uuid.UUID(asset_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+    playlist_uuid = parse_uuid(playlist_id, "playlist ID")
+    asset_uuid = parse_uuid(asset_id, "asset ID")
 
     with get_session() as db:
         playlist = db.get(Playlist, playlist_uuid)
@@ -441,7 +411,7 @@ async def set_playlist_item_position(
 
         items = (
             db.query(PlaylistAsset)
-            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .filter(as_clause(PlaylistAsset.playlist_id == playlist.id))
             .order_by(cast(Any, PlaylistAsset.position))
             .all()
         )
@@ -474,15 +444,8 @@ async def delete_playlist_item(
     asset_id: str,
     admin_session: AdminSession = Depends(get_current_admin_session),
 ):
-    try:
-        playlist_uuid = uuid.UUID(playlist_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
-
-    try:
-        asset_uuid = uuid.UUID(asset_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+    playlist_uuid = parse_uuid(playlist_id, "playlist ID")
+    asset_uuid = parse_uuid(asset_id, "asset ID")
 
     with get_session() as db:
         playlist = db.get(Playlist, playlist_uuid)
@@ -491,7 +454,7 @@ async def delete_playlist_item(
 
         items = (
             db.query(PlaylistAsset)
-            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .filter(as_clause(PlaylistAsset.playlist_id == playlist.id))
             .order_by(cast(Any, PlaylistAsset.position))
             .all()
         )
@@ -514,15 +477,8 @@ async def get_playlist_context(
     playlist_id: str,
     asset_id: str,
 ):
-    try:
-        playlist_uuid = uuid.UUID(playlist_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid playlist ID format")
-
-    try:
-        asset_uuid = uuid.UUID(asset_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid asset ID format")
+    playlist_uuid = parse_uuid(playlist_id, "playlist ID")
+    asset_uuid = parse_uuid(asset_id, "asset ID")
 
     with get_session() as db:
         playlist = db.get(Playlist, playlist_uuid)
@@ -531,7 +487,7 @@ async def get_playlist_context(
 
         items = (
             db.query(PlaylistAsset)
-            .filter(_as_clause(PlaylistAsset.playlist_id == playlist.id))
+            .filter(as_clause(PlaylistAsset.playlist_id == playlist.id))
             .order_by(cast(Any, PlaylistAsset.position))
             .all()
         )
