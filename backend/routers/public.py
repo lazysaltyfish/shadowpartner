@@ -5,6 +5,7 @@ This module contains all endpoints that are accessible without any session.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -26,7 +27,7 @@ from db.crud import (
 from db.models import Asset, AssetType, SubtitleTrack, SubtitleTrackType
 from models import Segment, SessionResponse, TaskInfo, Word
 from routers.decorators import rate_limit
-from session_manager import AdminSession, get_current_admin_session
+from session_manager import AdminSession, AuthSession, get_current_admin_session
 from utils.db_helpers import as_clause
 from utils.logger import get_logger
 from utils.validation import parse_uuid
@@ -96,6 +97,32 @@ async def create_session(request: Request):
         user = get_or_create_guest_user(db, client_host)
 
     session = session_manager.create_session(client_host, user)
+    return SessionResponse(session_id=session.session_id, expires_at=int(session.expires_at))
+
+
+@router.post("/api/session/refresh")
+@rate_limit(RateLimitTier.STRICT)
+async def refresh_session(
+    request: Request,
+    session: AuthSession = Depends(session_manager.get_current_session),
+):
+    """Refresh session TTL.
+
+    Extends the current session's expiration time. Useful for long-running
+    upload operations that may exceed the default session TTL.
+
+    Returns:
+        SessionResponse with updated expires_at timestamp
+    """
+    # Use Lock to protect against concurrent refresh, avoiding race conditions
+    async with session.lock:
+        # Re-validate session is not expired (inside lock)
+        if time.time() > session.expires_at:
+            raise HTTPException(status_code=401, detail="Session expired")
+
+        # Extend TTL using settings from session_manager
+        session.expires_at = time.time() + session_manager.settings.auth_session_ttl_seconds
+
     return SessionResponse(session_id=session.session_id, expires_at=int(session.expires_at))
 
 

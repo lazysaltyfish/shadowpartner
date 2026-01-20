@@ -17,6 +17,7 @@ logger = get_logger(__name__)
 
 settings = get_settings()
 AUTH_SESSION_SWEEP_SECONDS = 60
+ADMIN_SESSION_SWEEP_SECONDS = 300  # 5 minutes
 
 
 def create_session(ip_address: str, user: User) -> AuthSession:
@@ -211,8 +212,6 @@ def create_admin_session(username: str, ttl_seconds: int = 86400) -> AdminSessio
     Returns:
         AdminSession object
     """
-    import uuid
-
     session_id = str(uuid.uuid4())
     created_at = time.time()
     expires_at = created_at + ttl_seconds
@@ -315,9 +314,8 @@ async def get_current_admin_session_optional(
 
 async def sweep_admin_sessions():
     """Periodically clean up expired admin sessions."""
-    ADMIN_SWEEP_SECONDS = 300  # 5 minutes
     while True:
-        await asyncio.sleep(ADMIN_SWEEP_SECONDS)
+        await asyncio.sleep(ADMIN_SESSION_SWEEP_SECONDS)
         current_time = time.time()
         expired_sessions = [
             session_id
