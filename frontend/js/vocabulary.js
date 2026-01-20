@@ -40,6 +40,14 @@ function useVocabulary({ apiBaseUrl }) {
         return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     };
 
+    // Check if a word contains kanji (Chinese characters)
+    // Returns true if the text contains any CJK Unified Ideographs
+    const hasKanji = (text) => {
+        if (!text) return false;
+        // CJK Unified Ideographs block: U+4E00 to U+9FAF
+        return /[\u4e00-\u9faf]/.test(text);
+    };
+
     // Filter vocabulary by selected level and search query
     const filteredVocabulary = computed(() => {
         let filtered = vocabulary.value;
@@ -138,6 +146,7 @@ function useVocabulary({ apiBaseUrl }) {
         // Methods
         getJlptBadgeClass,
         formatTimestamp,
+        hasKanji,
         loadVocabulary,
         resetVocabulary,
     };

@@ -166,6 +166,7 @@ createApp({
             jlptLevels,
             getJlptBadgeClass,
             formatTimestamp,
+            hasKanji,
             loadVocabulary,
             resetVocabulary
         } = useVocabulary({ apiBaseUrl });
@@ -1075,6 +1076,7 @@ createApp({
             jlptLevels,
             getJlptBadgeClass,
             formatTimestamp,
+            hasKanji,
 
             // Toast notification system
             toasts,

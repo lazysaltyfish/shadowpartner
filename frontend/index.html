@@ -351,7 +351,7 @@
                                         >
                                             <ruby>
                                                 {{ word.text }}
-                                                <rt class="text-xs font-normal select-none transition-opacity" :class="isWordActive(word, segment) ? 'text-blue-200' : 'text-gray-500'">{{ word.reading }}</rt>
+                                                <rt v-if="hasKanji(word.text)" class="text-xs font-normal select-none transition-opacity" :class="isWordActive(word, segment) ? 'text-blue-200' : 'text-gray-500'">{{ word.reading }}</rt>
                                             </ruby>
                                         </span>
                                     </div>
@@ -547,7 +547,7 @@
                                         <div class="flex justify-between items-start mb-1">
                                             <ruby class="text-lg font-bold text-gray-900 font-jp">
                                                 {{ vocab.word }}
-                                                <rt class="text-xs text-gray-500 font-normal">{{ vocab.reading }}</rt>
+                                                <rt v-if="hasKanji(vocab.word)" class="text-xs text-gray-500 font-normal">{{ vocab.reading }}</rt>
                                             </ruby>
                                             <span class="px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide uppercase border" :class="getJlptBadgeClass(vocab.jlpt_level)">
                                                 {{ vocab.jlpt_level }}
@@ -592,7 +592,7 @@
                             <div class="flex justify-between items-start mb-1">
                                 <ruby class="text-lg font-bold text-gray-900 font-jp">
                                     {{ vocab.word }}
-                                    <rt class="text-xs text-gray-500 font-normal">{{ vocab.reading }}</rt>
+                                    <rt v-if="hasKanji(vocab.word)" class="text-xs text-gray-500 font-normal">{{ vocab.reading }}</rt>
                                 </ruby>
                                 <span class="px-1.5 py-0.5 rounded text-[10px] font-bold border" :class="getJlptBadgeClass(vocab.jlpt_level)">
                                     {{ vocab.jlpt_level }}
@@ -662,7 +662,7 @@
                             >
                                 <ruby>
                                     {{ word.text }}
-                                    <rt class="text-xs font-normal select-none transition-opacity" :class="isWordActive(word, segment) ? 'text-blue-200' : 'text-gray-500'">{{ word.reading }}</rt>
+                                    <rt v-if="hasKanji(word.text)" class="text-xs font-normal select-none transition-opacity" :class="isWordActive(word, segment) ? 'text-blue-200' : 'text-gray-500'">{{ word.reading }}</rt>
                                 </ruby>
                             </span>
                         </div>
