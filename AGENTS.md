@@ -141,12 +141,20 @@ routers/                      # Modular router architecture
   ├── auth.py                # Endpoints requiring X-Session-Id (upload, process)
   ├── admin_auth.py          # Admin login/logout (no auth required)
   ├── admin.py               # Admin endpoints (users, assets, subtitles)
-  └── playlist.py            # Playlist management endpoints
+  ├── playlist.py            # Playlist management endpoints
+  ├── internal.py            # Internal API for worker file access
+  └── workers.py             # WebSocket endpoint for GPU workers
 session_manager.py             # Anonymous auth session management (DB-backed) + admin sessions
 processing.py                  # Download/transcribe/analyze/translate pipeline + DB caching
 uploads.py                     # Upload sessions + sweeper + storage integration
 models.py                      # Pydantic models + UploadSession + AuthSession + AdminLoginRequest
 state.py                       # In-memory task store + upload sessions + auth sessions + admin sessions + executors
+workers/                       # GPU Worker architecture (NEW)
+  ├── __init__.py              # WorkerManager export
+  ├── models.py                # Worker data models (JobStatus, WorkerInfo, WebSocket messages)
+  ├── job_queue.py             # Async job queue with timeout and retry
+  ├── storage_bridge.py        # Pre-signed URL generation for worker file access
+  └── manager.py               # WebSocket server for worker connections
 db/                            # Database module
   ├── __init__.py
   ├── engine.py               # Database engine (SQLite setup)
@@ -190,6 +198,16 @@ services/
 data/                           # [NEW] Persistent data (git ignored)
   ├── shadow.db            # SQLite database
   └── storage/             # File storage (hash-prefixed directories)
+worker/                        # [NEW] Standalone GPU Worker client
+  ├── main.py                # Worker entry point
+  ├── client.py              # WebSocket client with auto-reconnect
+  ├── transcriber.py         # Whisper wrapper with progress reporting
+  ├── downloader.py          # Audio file downloader with cache
+  ├── config.py              # Configuration loader
+  ├── logger.py              # Logging setup
+  ├── requirements.txt       # Worker dependencies
+  ├── .env.example           # Configuration template
+  └── README.md              # Worker documentation
 ```
 
 ### Frontend Structure (`/frontend`)
@@ -215,7 +233,7 @@ Input (YouTube URL or File)
   → Check cache (SubtitleTrack DB)
   → [Cache hit] Return cached result
   → [Cache miss] Download audio/video (downloader.py)
-  → Whisper transcription with word timestamps (transcriber.py)
+  → Transcribe with GPU Worker if available (worker/), else local (transcriber.py)
   → Japanese morphological analysis + furigana (analyzer.py)
   → Batch translate to Chinese (translator.py)
   → Vocabulary extraction (vocabulary_analyzer.py, Japanese-only)
@@ -672,19 +690,28 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 - `AUTH_SESSION_MAX_TOTAL_SIZE` - Max total upload size per session in bytes (default: 524288000, 500MB)
 - `ADMIN_USERNAME` - Admin username for admin panel access (required for admin features)
 - `ADMIN_PASSWORD` - Admin password for admin panel access (required for admin features)
+- `WORKER_WS_PORT` - WebSocket server port for GPU workers (default: 8000, same as API)
+- `WORKER_API_TOKENS` - JSON mapping of worker_id:token for authentication (default: {})
+- `WORKER_HEARTBEAT_INTERVAL` - Worker heartbeat check interval in seconds (default: 15)
+- `WORKER_HEARTBEAT_TIMEOUT` - Worker heartbeat timeout in seconds (default: 30)
+- `WORKER_JOB_TIMEOUT` - Default job timeout in seconds (default: 600)
+- `WORKER_TEMP_DIR` - Temporary directory for worker file access (default: /tmp/shadowpartner_worker)
+- `WORKER_TRANSCRIBE_RETRY_ATTEMPTS` - Number of retry attempts for worker transcription (default: 2)
+- `BACKEND_BASE_URL` - Base URL for internal API (default: http://localhost:8000)
 
 ## Key Features
 1. **Video Input**: YouTube URL or local file upload (drag-and-drop supported)
 2. **Audio Processing**: Download → Convert to MP3 → Whisper transcription
-3. **Japanese NLP**: MeCab morphological analysis + automatic furigana generation
-4. **Translation**: Batch translation via Google Gemini API
-5. **Subtitle Alignment**: Align AI timestamps with reference subtitles, handle scrolling duplicates
-6. **Interactive Playback**: Word-level highlighting, click-to-seek functionality
-7. **PWA**: Offline support via Service Worker, installable app
-8. **Admin Panel**: Admin interface for managing users, assets, and subtitle tracks (requires ADMIN_USERNAME/PASSWORD)
-9. **Play Page Routing**: Dedicated play page via hash routing (`#/play/{asset_id}`), auto-redirect after processing
-10. **Frontend Routing**: Hash-based SPA routing with `/` (home video grid), `/upload` (upload page), and `/play/{asset_id}` routes
-11. **Playlists**: Publicly readable playlists (admin-managed for creation/modification) with ordered items, asset search, and play page sidebar context via `playlist_id`
+3. **GPU Worker Support (NEW)**: Standalone GPU workers connect via WebSocket for faster transcription with automatic fallback to local processing
+4. **Japanese NLP**: MeCab morphological analysis + automatic furigana generation
+5. **Translation**: Batch translation via Google Gemini API
+6. **Subtitle Alignment**: Align AI timestamps with reference subtitles, handle scrolling duplicates
+7. **Interactive Playback**: Word-level highlighting, click-to-seek functionality
+8. **PWA**: Offline support via Service Worker, installable app
+9. **Admin Panel**: Admin interface for managing users, assets, and subtitle tracks (requires ADMIN_USERNAME/PASSWORD)
+10. **Play Page Routing**: Dedicated play page via hash routing (`#/play/{asset_id}`), auto-redirect after processing
+11. **Frontend Routing**: Hash-based SPA routing with `/` (home video grid), `/upload` (upload page), and `/play/{asset_id}` routes
+12. **Playlists**: Publicly readable playlists (admin-managed for creation/modification) with ordered items, asset search, and play page sidebar context via `playlist_id`
 
 ## Important Implementation Details
 - **Persistent Architecture**: Database-based storage with SQLite (easily upgradable to PostgreSQL via DATABASE_URL env var)
@@ -774,6 +801,26 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
   - Use `art.template.$layer.style.display = 'none'` to hide the center play button overlay
   - Detection method: `video.videoWidth === 0 || video.videoHeight === 0` in the `video:loadedmetadata` event
 
+- **GPU Worker Architecture** (2026-01): Distributed transcription using standalone GPU workers
+- **WebSocket Reverse Connection**: Workers connect to backend via WebSocket (`ws://backend:8000/ws/worker`)
+  - **Authentication**: Token-based auth using `WORKER_API_TOKENS` JSON config (e.g., `{"gpu-worker-1": "secret-token"}`)
+  - **Job Flow**: Backend generates pre-signed URL → Worker downloads audio → Worker transcribes → Worker uploads result
+  - **File Access**: `/api/internal/temp-file` streams storage-relative paths and worker temp absolute paths
+  - **Fault Tolerance**: Heartbeat monitoring (15s interval, 30s timeout), auto-reconnect with exponential backoff (1s→30s), job retry (max 2)
+  - **Progress Reporting**: Worker estimates progress based on audio duration and processing rate, forwarded to TaskInfo
+  - **Fallback**: Automatic fallback to local transcription if worker unavailable or fails
+  - **Worker Management**: `/health` endpoint includes worker stats (connected/idle/busy workers, job queue status)
+  - **Files**: `backend/workers/` (server), `worker/` (standalone client)
+  - **Environment Variables**:
+    - `WORKER_WS_PORT`: WebSocket port (default: 8000, same as API)
+    - `WORKER_API_TOKENS`: `{"worker_id": "token"}` for auth
+    - `WORKER_HEARTBEAT_INTERVAL`: Heartbeat check interval (default: 15)
+    - `WORKER_HEARTBEAT_TIMEOUT`: Worker timeout (default: 30)
+    - `WORKER_JOB_TIMEOUT`: Job timeout (default: 600)
+    - `WORKER_TEMP_DIR`: Temp file directory (default: /tmp/shadowpartner_worker)
+    - `WORKER_TRANSCRIBE_RETRY_ATTEMPTS`: Retry attempts (default: 2)
+    - `BACKEND_BASE_URL`: Backend URL for worker (default: http://localhost:8000)
+
 ## Running the Application
 
 **Prerequisites**:
@@ -792,6 +839,15 @@ uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```bash
 cd backend
 uv run python main.py --no-rate-limit --port 8000
+```
+
+**GPU Worker** (optional, for faster transcription):
+```bash
+cd worker
+cp .env.example .env
+# Edit .env with your backend URL and worker credentials
+pip install -r requirements.txt
+python main.py
 ```
 
 ## AI Workflow: Adding New APIs

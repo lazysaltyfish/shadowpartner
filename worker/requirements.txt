@@ -1,0 +1,16 @@
+# Whisper GPU Worker Dependencies
+
+# WebSocket client
+websockets>=12.0
+
+# Whisper transcription
+openai-whisper>=20231117
+
+# Audio processing
+ffmpeg-python>=0.2.0
+
+# HTTP client for downloads
+aiohttp>=3.9.0
+
+# Configuration
+python-dotenv>=1.0.0

@@ -4,11 +4,13 @@ import asyncio
 import difflib
 import os
 import re
+import shutil
 import tempfile
 import time
 import uuid
 from collections import Counter
 from functools import partial
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import services_registry as services
@@ -23,10 +25,20 @@ from db.crud import (
 from db.models import Asset, AssetType, SubtitleSource, SubtitleTrack, SubtitleTrackType
 from models import ProcessingMetrics, Segment, TaskStatus, VideoResponse, Word
 from services.video_utils import build_thumbnail_storage_path, generate_thumbnail, get_video_source
+from settings import get_settings
 from uploads import release_upload_session
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _get_worker_temp_dir() -> str:
+    """Get the worker temp directory from services registry."""
+    if not services.worker_temp_dir:
+        raise RuntimeError(
+            "Services not initialized. Call services_registry.init_services() at startup."
+        )
+    return services.worker_temp_dir
 
 
 def update_task(
@@ -64,6 +76,244 @@ async def run_cpu_bound(func, *args, **kwargs):
         return await asyncio.to_thread(func, *args, **kwargs)
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(state.executor, partial(func, *args, **kwargs))
+
+
+async def _prepare_file_for_worker(file_path: str, task_id: str) -> tuple[str, bool]:
+    """Prepare a file for worker access by copying to a temp directory.
+
+    Args:
+        file_path: Original file path (temp or storage)
+        task_id: Task ID for creating unique filename
+
+    Returns:
+        Tuple of (worker_path, is_temporary)
+        - worker_path: Path that worker can access via internal API
+        - is_temporary: True if file was copied to temp, False if using storage path
+    """
+    worker_temp_dir = _get_worker_temp_dir()
+
+    # Check if file is already a storage path (relative identifier)
+    if services.storage and not Path(file_path).is_absolute():
+        try:
+            if await services.storage.exists(file_path):
+                logger.info(f"Task {task_id}: File is in storage: {file_path}")
+                return file_path, False
+        except Exception as e:
+            logger.warning(f"Task {task_id}: Storage lookup failed for {file_path}: {e}")
+
+    # Check if absolute path lives under local storage root
+    if services.storage and Path(file_path).is_absolute():
+        storage_root = getattr(services.storage, "root_dir", None)
+        if storage_root:
+            abs_path = Path(file_path).resolve()
+            storage_root_path = Path(storage_root).resolve()
+            if abs_path.is_relative_to(storage_root_path):
+                storage_path = abs_path.name
+                try:
+                    if await services.storage.exists(storage_path):
+                        logger.info(f"Task {task_id}: File is in storage: {storage_path}")
+                        return storage_path, False
+                except Exception as e:
+                    logger.warning(f"Task {task_id}: Storage lookup failed for {storage_path}: {e}")
+
+    # For temp files, copy to worker temp directory
+    ext = os.path.splitext(file_path)[1] or ".wav"
+    worker_filename = f"{task_id}_{uuid.uuid4().hex[:8]}{ext}"
+    worker_path = os.path.join(worker_temp_dir, worker_filename)
+
+    os.makedirs(worker_temp_dir, exist_ok=True)
+    await asyncio.to_thread(shutil.copy2, file_path, worker_path)
+    logger.info(f"Task {task_id}: Copied file to worker temp: {worker_path}")
+    return worker_path, True
+
+
+async def _cleanup_worker_file(worker_path: str, is_temporary: bool):
+    """Clean up worker file after transcription.
+
+    Args:
+        worker_path: Path to the worker file
+        is_temporary: True if file is temporary (should be deleted)
+    """
+    if not is_temporary:
+        # Storage files are kept
+        return
+
+    try:
+        if os.path.exists(worker_path):
+            os.remove(worker_path)
+            logger.debug(f"Cleaned up worker temp file: {worker_path}")
+    except Exception as e:
+        logger.warning(f"Failed to cleanup worker temp file {worker_path}: {e}")
+
+
+async def transcribe_with_worker(
+    task_id: str,
+    file_path: str,
+    language: str = "ja",
+) -> Optional[dict]:
+    """Transcribe audio file using GPU worker.
+
+    Args:
+        task_id: Task ID for progress tracking
+        file_path: Path to audio file
+        language: Language code for transcription
+
+    Returns:
+        Transcription result dict with segments, language, language_probs
+        None if worker unavailable or transcription failed after retries
+    """
+    settings = get_settings()
+
+    # Check if worker manager is available
+    if not services.worker_manager or not services.storage_bridge:
+        return None
+
+    # Check if any worker is connected
+    if not services.worker_manager.has_active_worker():
+        logger.info(f"Task {task_id}: No workers available, using local transcription")
+        return None
+
+    logger.info(f"Task {task_id}: Using GPU worker for transcription")
+
+    # Prepare file for worker access
+    worker_path, is_temporary = await _prepare_file_for_worker(file_path, task_id)
+
+    # Generate pre-signed URL
+    audio_url = services.storage_bridge.generate_presigned_url(
+        worker_path,
+        ttl_seconds=settings.temp_file_ttl,
+    )
+
+    # Build job options
+    options = {"language": language}
+
+    retry_attempts = settings.worker_transcribe_retry_attempts
+
+    for attempt in range(retry_attempts):
+        try:
+            # Submit job to worker (10 minute timeout)
+            result = await services.worker_manager.submit_transcribe_job(
+                task_id=task_id,
+                audio_path=worker_path,
+                audio_url=audio_url,
+                timeout=settings.worker_job_timeout,
+                options=options,
+            )
+
+            # Revoke signature after job completes
+            services.storage_bridge.revoke_signature(worker_path)
+
+            try:
+                await _cleanup_worker_file(worker_path, is_temporary)
+            except Exception as e:
+                logger.warning(f"Task {task_id}: Cleanup failed for worker file {worker_path}: {e}")
+            return result
+
+        except RuntimeError as e:
+            if "No workers available" in str(e):
+                logger.info(f"Task {task_id}: Worker became unavailable, falling back")
+                update_task(
+                    task_id,
+                    TaskStatus.PROCESSING,
+                    10,
+                    "Worker unavailable, falling back to local transcription...",
+                )
+                break
+            logger.warning(
+                f"Task {task_id}: Worker attempt {attempt + 1}/{retry_attempts} failed: {e}"
+            )
+            update_task(
+                task_id,
+                TaskStatus.PROCESSING,
+                10,
+                f"Worker error, retrying ({attempt + 1}/{retry_attempts})...",
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Task {task_id}: Worker attempt {attempt + 1}/{retry_attempts} timed out"
+            )
+            update_task(
+                task_id,
+                TaskStatus.PROCESSING,
+                10,
+                f"Worker timeout, retrying ({attempt + 1}/{retry_attempts})...",
+            )
+        except Exception as e:
+            logger.warning(
+                f"Task {task_id}: Worker attempt {attempt + 1}/{retry_attempts} failed: {e}"
+            )
+            update_task(
+                task_id,
+                TaskStatus.PROCESSING,
+                10,
+                f"Worker error, retrying ({attempt + 1}/{retry_attempts})...",
+            )
+
+        # If not the last attempt, wait a bit before retrying
+        if attempt < retry_attempts - 1:
+            await asyncio.sleep(1)
+
+    # All attempts failed, clean up and fall back
+    logger.error(f"Task {task_id}: Worker transcription failed after {retry_attempts} attempts")
+    if services.storage_bridge:
+        services.storage_bridge.revoke_signature(worker_path)
+    try:
+        await _cleanup_worker_file(worker_path, is_temporary)
+    except Exception as e:
+        logger.warning(f"Task {task_id}: Cleanup failed for worker file {worker_path}: {e}")
+    return None
+
+
+async def transcribe_local(
+    task_id: str,
+    file_path: str,
+    language: str = "ja",
+) -> dict:
+    """Transcribe audio file using local Whisper.
+
+    Args:
+        task_id: Task ID for progress tracking
+        file_path: Path to audio file
+        language: Language code for transcription
+
+    Returns:
+        Transcription result dict with segments, language, language_probs
+    """
+    logger.info(f"Task {task_id}: Using local transcription")
+
+    if services.whisper_lock:
+        update_task(
+            task_id,
+            TaskStatus.PROCESSING,
+            5,
+            f"Waiting for {services.whisper_lock_label} slot...",
+        )
+        async with services.whisper_lock:
+            update_task(
+                task_id,
+                TaskStatus.PROCESSING,
+                10,
+                "Transcribing audio locally...",
+            )
+            result = await run_cpu_bound(
+                services.transcriber.transcribe,
+                file_path,
+                language=language,
+            )
+    else:
+        update_task(
+            task_id,
+            TaskStatus.PROCESSING,
+            10,
+            "Transcribing audio locally...",
+        )
+        result = await run_cpu_bound(
+            services.transcriber.transcribe,
+            file_path,
+            language=language,
+        )
+
+    return result
 
 
 async def _generate_upload_thumbnail(
@@ -441,55 +691,31 @@ async def process_audio_task(
     try:
         _ensure_services_initialized()
         # 2. Transcribe (Always run AI for timing reference)
-        if services.whisper_lock:
-            update_task(
-                task_id,
-                TaskStatus.PROCESSING,
-                5,
-                f"Waiting for {services.whisper_lock_label} slot...",
-            )
-            async with services.whisper_lock:
-                update_task(
-                    task_id,
-                    TaskStatus.PROCESSING,
-                    10,
-                    "Transcribing audio (Generating Timing Reference)...",
-                )
-                logger.info(f"Task {task_id}: Starting transcription for timing reference")
-                t0 = time.time()
-                gen_result = await run_cpu_bound(
-                    services.transcriber.transcribe,
-                    file_path,
-                    language="ja",
-                )
-                generated_segments = gen_result["segments"]
-                transcribe_time = time.time() - t0
-                logger.info(
-                    "Task %s: Transcription completed in %.2fs",
-                    task_id,
-                    transcribe_time,
-                )
-        else:
-            update_task(
-                task_id,
-                TaskStatus.PROCESSING,
-                10,
-                "Transcribing audio (Generating Timing Reference)...",
-            )
-            logger.info(f"Task {task_id}: Starting transcription for timing reference")
-            t0 = time.time()
-            gen_result = await run_cpu_bound(
-                services.transcriber.transcribe,
-                file_path,
-                language="ja",
-            )
-            generated_segments = gen_result["segments"]
-            transcribe_time = time.time() - t0
-            logger.info(
-                "Task %s: Transcription completed in %.2fs",
-                task_id,
-                transcribe_time,
-            )
+        # Try GPU worker first, fall back to local transcription
+        update_task(
+            task_id,
+            TaskStatus.PROCESSING,
+            5,
+            "Starting transcription...",
+        )
+
+        logger.info(f"Task {task_id}: Starting transcription for timing reference")
+        t0 = time.time()
+
+        # Try worker first
+        gen_result = await transcribe_with_worker(task_id, file_path, language="ja")
+
+        # Fall back to local if worker unavailable or failed
+        if gen_result is None:
+            gen_result = await transcribe_local(task_id, file_path, language="ja")
+
+        generated_segments = gen_result["segments"]
+        transcribe_time = time.time() - t0
+        logger.info(
+            "Task %s: Transcription completed in %.2fs",
+            task_id,
+            transcribe_time,
+        )
 
         reference_segments = []
 

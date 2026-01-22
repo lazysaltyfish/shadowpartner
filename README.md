@@ -7,6 +7,7 @@ ShadowPartner 是一款面向日语学习者的渐进式 Web 应用（PWA），�
 ### 核心功能
 - **视频处理**：自动下载和处理 YouTube 视频或本地文件
 - **语音识别**：使用 OpenAI Whisper 进行准确的日语转录，带词级时间戳
+- **GPU Worker (NEW)**: 支持 GPU Worker 通过 WebSocket 连接进行加速转录，自动回退到本地处理
 - **日语NLP**：使用 MeCab 进行形态学分析，自动生成假名注音
 - **翻译**：通过 Google Gemini API 进行批量翻译
 - **交互式播放**：词级高亮、点击跳转功能
@@ -76,9 +77,21 @@ shadowpartner/
 │   │   ├── resilience.py          # 重试辅助
 │   │   └── task_manager.py        # 异步任务辅助
 │   ├── tests/                     # 单元测试
+│   ├── workers/                   # GPU Worker 服务端 (NEW)
+│   │   ├── models.py              # Worker 数据模型
+│   │   ├── job_queue.py           # 任务队列
+│   │   ├── storage_bridge.py      # 预签名 URL 生成
+│   │   └── manager.py             # Worker 管理器
 │   └── data/                      # 持久化数据（git忽略）
 │       ├── shadow.db              # SQLite 数据库
 │       └── storage/               # 文件存储
+├── worker/                       # GPU Worker 客户端 (NEW)
+│   ├── main.py                    # Worker 入口
+│   ├── client.py                  # WebSocket 客户端
+│   ├── transcriber.py             # Whisper 包装器
+│   ├── downloader.py              # 音频下载器
+│   ├── config.py                  # 配置加载
+│   └── requirements.txt           # Worker 依赖
 ├── frontend/
 │   ├── index.html                 # 主页面
 │   ├── js/
@@ -99,14 +112,15 @@ shadowpartner/
 
 1. **双视频输入**：YouTube 链接或本地文件上传（支持拖拽）
 2. **词级时间戳**：Whisper 转录带每个词的时间戳
-3. **假名注音**：使用 MeCab 自动生成日语读音
-4. **中文翻译**：通过 Google Gemini API 进行批量翻译
-5. **用户字幕支持**：上传 SRT 文件与 AI 时间戳对齐
-6. **交互式播放**：点击任意单词跳转到该位置
-7. **PWA 支持**：可安装，支持离线使用
-8. **管理面板**：管理用户、资产和字幕轨道
-9. **速率限制**：可配置的 API 速率限制
-10. **会话管理**：匿名上传会话，支持 TTL 和限制
+3. **GPU Worker 支持**：GPU Worker 通过 WebSocket 连接加速转录
+4. **假名注音**：使用 MeCab 自动生成日语读音
+5. **中文翻译**：通过 Google Gemini API 进行批量翻译
+6. **用户字幕支持**：上传 SRT 文件与 AI 时间戳对齐
+7. **交互式播放**：点击任意单词跳转到该位置
+8. **PWA 支持**：可安装，支持离线使用
+9. **管理面板**：管理用户、资产和字幕轨道
+10. **速率限制**：可配置的 API 速率限制
+11. **会话管理**：匿名上传会话，支持 TTL 和限制
 
 ## 环境准备
 
@@ -183,6 +197,30 @@ uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 - `--port` - 端口（默认：8000）
 - `--reload` - 代码更改时自动重载
 
+### 启动 GPU Worker（可选）
+
+GPU Worker 可以加速转录处理，自动回退到本地处理。
+
+```bash
+cd worker
+cp .env.example .env
+# 编辑 .env 文件配置后端地址和 Worker 凭证
+pip install -r requirements.txt
+python main.py
+```
+
+**Worker 配置 (.env)**:
+```bash
+BACKEND_WS_URL=ws://localhost:8001/ws/worker
+WORKER_TOKEN=your_secret_token
+WORKER_ID=gpu-worker-1
+WHISPER_MODEL_SIZE=base
+WHISPER_DEVICE=cuda
+WHISPER_FP16=true
+AUDIO_CACHE_DIR=./cache
+MAX_CACHE_SIZE_GB=10
+```
+
 ### 启动前端
 
 ```bash
@@ -231,6 +269,14 @@ uv run python -m http.server --directory ../frontend 3000
 | `RATE_LIMIT_PROCESS_PER_MINUTE` | 处理端点速率限制 | `5` |
 | `ADMIN_USERNAME` | 管理面板用户名 | `None` |
 | `ADMIN_PASSWORD` | 管理面板密码 | `None` |
+| `WORKER_WS_PORT` | Worker WebSocket 端口 | `8001` |
+| `WORKER_API_TOKENS` | Worker 认证令牌 JSON | `{}` |
+| `WORKER_HEARTBEAT_INTERVAL` | 心跳检查间隔（秒） | `15` |
+| `WORKER_HEARTBEAT_TIMEOUT` | 心跳超时（秒） | `30` |
+| `WORKER_JOB_TIMEOUT` | 任务超时（秒） | `600` |
+| `WORKER_TEMP_DIR` | Worker 临时文件目录 | `/tmp/shadowpartner_worker` |
+| `WORKER_TRANSCRIBE_RETRY_ATTEMPTS` | 转录重试次数 | `2` |
+| `BACKEND_BASE_URL` | Worker 后端 URL | `http://localhost:8000` |
 
 ## API 端点
 
@@ -274,7 +320,7 @@ uv run python -m http.server --directory ../frontend 3000
   → 检查缓存（SubtitleTrack 数据库）
   → [缓存命中] 返回缓存结果
   → [缓存未命中] 下载音视频
-  → Whisper 转录（词级时间戳）
+  → 转录（优先使用 GPU Worker，自动回退本地）
   → 日语形态学分析 + 假名注音
   → 批量翻译成中文
   → 保存到数据库

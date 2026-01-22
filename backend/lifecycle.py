@@ -34,6 +34,10 @@ async def startup_event():
 
 async def shutdown_event():
     """Cleanup resources on shutdown."""
+    if services_registry.worker_manager:
+        await services_registry.worker_manager.stop()
+    # Clean up worker temp directory
+    services_registry.cleanup_worker_temp_dir()
     if state.task_manager:
         await state.task_manager.shutdown(timeout=5.0)
     if state.executor:

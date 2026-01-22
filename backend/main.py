@@ -13,8 +13,10 @@ from routers import (
     admin_auth_router,
     admin_router,
     auth_router,
+    internal_router,
     playlist_router,
     public_router,
+    workers_router,
 )
 from utils.logger import get_logger
 from utils.path_setup import setup_local_bin_path
@@ -75,6 +77,10 @@ def create_app(rate_limit_enabled_override: bool | None = None) -> FastAPI:
     app.include_router(playlist_router)
     # auth has /api/upload/* and /api/process (requires user session)
     app.include_router(auth_router)
+    # internal has /api/internal/* (no auth, for workers only)
+    app.include_router(internal_router)
+    # workers has /ws/* (WebSocket endpoint for GPU workers)
+    app.include_router(workers_router)
     # public has all other endpoints (no auth required)
     app.include_router(public_router)
 

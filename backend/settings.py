@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional
+from typing import Dict, Optional
 
 from dotenv import load_dotenv
 
@@ -64,6 +65,17 @@ def _parse_optional_float(name: str) -> Optional[float]:
         raise ValueError(f"Invalid float for {name}: {raw}") from exc
 
 
+def _parse_json_dict(name: str, default: str = "{}") -> Dict[str, str]:
+    """Parse a JSON string into a dictionary."""
+    raw = _get_env(name)
+    if raw is None:
+        raw = default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON for {name}: {raw}") from exc
+
+
 @dataclass(frozen=True)
 class Settings:
     whisper_device: Optional[str]
@@ -92,6 +104,15 @@ class Settings:
     admin_password: Optional[str]
     # Storage configuration
     storage_root_dir: str
+    # Worker configuration
+    worker_ws_port: int
+    worker_api_tokens: str  # JSON string: {"worker_id": "token"}
+    worker_heartbeat_interval: int
+    worker_heartbeat_timeout: int
+    worker_job_timeout: int
+    worker_transcribe_retry_attempts: int  # Number of retries before falling back to local
+    backend_base_url: str
+    temp_file_ttl: int
 
     @property
     def proxy(self) -> Optional[str]:
@@ -131,4 +152,13 @@ def get_settings() -> Settings:
         admin_username=_get_env("ADMIN_USERNAME"),
         admin_password=_get_env("ADMIN_PASSWORD"),
         storage_root_dir=_get_env("STORAGE_ROOT_DIR") or "data/storage",
+        # Worker settings
+        worker_ws_port=_parse_int("WORKER_WS_PORT", 8000),
+        worker_api_tokens=_get_env("WORKER_API_TOKENS") or "{}",
+        worker_heartbeat_interval=_parse_int("WORKER_HEARTBEAT_INTERVAL", 15),
+        worker_heartbeat_timeout=_parse_int("WORKER_HEARTBEAT_TIMEOUT", 30),
+        worker_job_timeout=_parse_int("WORKER_JOB_TIMEOUT", 600),
+        worker_transcribe_retry_attempts=_parse_int("WORKER_TRANSCRIBE_RETRY_ATTEMPTS", 2),
+        backend_base_url=_get_env("BACKEND_BASE_URL") or "http://localhost:8000",
+        temp_file_ttl=_parse_int("TEMP_FILE_TTL", 3600),
     )

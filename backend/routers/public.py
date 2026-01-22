@@ -71,6 +71,22 @@ async def health_check(request: Request):
             services_registry.whisper_lock.locked() if services_registry.whisper_lock else False
         ),
     }
+
+    # Add worker stats if worker manager is available
+    if services_registry.worker_manager:
+        stats = services_registry.worker_manager.get_stats()
+        health_status["workers"] = {
+            "connected": stats.connected,
+            "idle": stats.idle,
+            "busy": stats.busy,
+            "workers": stats.workers,
+        }
+        health_status["transcribe_jobs"] = {
+            "pending": stats.pending_jobs,
+            "assigned": stats.assigned_jobs,
+            "processing": stats.processing_jobs,
+        }
+
     return health_status
 
 
