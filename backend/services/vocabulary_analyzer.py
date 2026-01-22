@@ -124,15 +124,10 @@ class VocabularyAnalyzer:
         settings = get_settings()
         api_key = settings.gemini_api_key
 
-        # Set timeout before creating client so it can be used in client config
-        self.request_timeout_seconds = 120  # Longer timeout for analysis
-
         self.client = None
         if api_key:
-            self.client = genai.Client(
-                api_key=api_key,
-                http_options={"timeout": self.request_timeout_seconds},
-            )
+            # Use library's default timeout/deadline (no http_options)
+            self.client = genai.Client(api_key=api_key)
         self.available = bool(api_key)
         self.model_id = settings.gemini_model_id
         self.executor = executor
