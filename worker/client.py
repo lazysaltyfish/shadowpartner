@@ -259,7 +259,7 @@ class WhisperWorkerClient:
         while True:
             try:
                 await asyncio.sleep(15)
-                if self.ws and not self.ws.closed:
+                if self.ws and not getattr(self.ws, "closed", False):
                     await self.ws.send(json.dumps({"type": "heartbeat"}))
             except asyncio.CancelledError:
                 break

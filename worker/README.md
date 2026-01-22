@@ -7,7 +7,7 @@ Connects to the ShadowPartner backend via WebSocket.
 
 - Python 3.11+
 - CUDA-capable GPU (recommended)
-- FFmpeg
+- FFmpeg (auto-installed on startup for Linux/Windows; manual install on macOS)
 
 ## Installation
 
@@ -100,6 +100,7 @@ Since Whisper doesn't support native progress callbacks, the worker estimates pr
 - Verify WORKER_ID matches the key in backend tokens
 
 **Transcription errors**
+- Worker auto-installs FFmpeg into `worker/bin` when missing (Linux/Windows).
 - Check FFmpeg is installed: `ffmpeg -version`
 - Verify audio files can be downloaded
 - Check GPU availability: `nvidia-smi`

@@ -200,11 +200,12 @@ data/                           # [NEW] Persistent data (git ignored)
   └── storage/             # File storage (hash-prefixed directories)
 worker/                        # [NEW] Standalone GPU Worker client
   ├── main.py                # Worker entry point
-  ├── client.py              # WebSocket client with auto-reconnect
+  ├── client.py              # WebSocket client with auto-reconnect + heartbeat (websockets v12-safe)
   ├── transcriber.py         # Whisper wrapper with progress reporting
   ├── downloader.py          # Audio file downloader with cache
   ├── config.py              # Configuration loader
   ├── logger.py              # Logging setup
+  ├── setup_ffmpeg.py         # Auto-install ffmpeg/ffprobe into worker/bin if missing
   ├── requirements.txt       # Worker dependencies
   ├── .env.example           # Configuration template
   └── README.md              # Worker documentation

@@ -6,6 +6,7 @@ import sys
 
 from client import WhisperWorkerClient
 from logger import get_logger
+from setup_ffmpeg import ensure_ffmpeg
 
 logger = get_logger(__name__)
 
@@ -25,6 +26,12 @@ def main():
     # Setup signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        ensure_ffmpeg()
+    except Exception as e:
+        logger.error(f"FFmpeg setup failed: {e}")
+        sys.exit(1)
 
     # Create and start worker
     global worker
