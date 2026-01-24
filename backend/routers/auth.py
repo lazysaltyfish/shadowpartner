@@ -23,6 +23,7 @@ from fastapi import (
     UploadFile,
 )
 
+import services_registry
 import session_manager
 import state
 from api_policy import RateLimitTier
@@ -87,6 +88,12 @@ def _get_existing_asset(identifier: str, asset_type: AssetType) -> Optional[Asse
     """
     with get_session() as db:
         return get_asset_by_identifier(db, asset_type, identifier)
+
+
+def _require_worker_online() -> None:
+    worker_manager = services_registry.worker_manager
+    if not worker_manager or not worker_manager.has_active_worker():
+        raise HTTPException(status_code=503, detail="No workers available")
 
 
 async def handle_existing_file(
@@ -168,6 +175,8 @@ async def process_video(
             if not limit_ok:
                 raise HTTPException(status_code=429, detail="Session upload limit exceeded")
 
+        _require_worker_online()
+
         # Check for existing asset
         youtube_id = video_request.url.split("v=")[-1].split("&")[0].split("/watch?v=")[-1][:11]
         existing_asset = _get_existing_asset(youtube_id, AssetType.YOUTUBE)
@@ -219,6 +228,7 @@ async def init_upload(
     total_chunks: int = Form(...),
     total_size: int = Form(...),
 ):
+    _require_worker_online()
     validate_upload_metadata(filename, total_size)
     task_id = str(uuid.uuid4())
     await asyncio.to_thread(_ensure_dir, UPLOAD_DIR)
@@ -361,6 +371,8 @@ async def complete_upload(
     if session is None:
         return AsyncProcessResponse(task_id=task_id, message="Processing already started")
 
+    _require_worker_online()
+
     async with session.lock:
         if session.completed:
             return AsyncProcessResponse(task_id=task_id, message="Processing already started")
@@ -483,6 +495,7 @@ async def upload_video(
         raise HTTPException(status_code=400, detail="Filename is missing")
 
     await validate_upload_file(file)
+    _require_worker_online()
 
     # Handle file upload and check for existing asset
     video_id, temp_file, subtitle_path = await handle_file_upload(file, file.filename, subtitle)

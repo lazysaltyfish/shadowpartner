@@ -45,9 +45,6 @@ def storage_dir() -> Generator[tempfile.TemporaryDirectory[str], None, None]:
     with patch("services_registry.get_settings") as mock_settings:
         settings_mock = Mock()
         settings_mock.storage_root_dir = tmpdir.name
-        settings_mock.whisper_device = None
-        settings_mock.whisper_fp16 = False
-        settings_mock.whisper_model_size = "base"
         mock_settings.return_value = settings_mock
 
         # Reinitialize storage service with temp directory

@@ -74,6 +74,13 @@ class JobCompleteMessage(BaseModel):
     result: dict
 
 
+class JobCompleteAckMessage(BaseModel):
+    """Job completion acknowledgment (server → client)."""
+
+    type: str = "job_complete_ack"
+    job_id: str
+
+
 class JobProgressMessage(BaseModel):
     """Job progress message (client → server)."""
 

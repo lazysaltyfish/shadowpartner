@@ -15,6 +15,7 @@ from workers.models import (
     ErrorMessage,
     HeartbeatAckMessage,
     JobAssignedMessage,
+    JobCompleteAckMessage,
     JobCompleteMessage,
     JobFailedMessage,
     JobProgressMessage,
@@ -228,6 +229,16 @@ class WorkerManager:
             except Exception as e:
                 logger.warning(f"[WorkerManager] Failed to send heartbeat ack: {e}")
 
+    async def _send_job_complete_ack(self, worker: WorkerInfo, job_id: str) -> None:
+        if not worker.ws_connection:
+            return
+        try:
+            await worker.ws_connection.send_json(
+                JobCompleteAckMessage(type="job_complete_ack", job_id=job_id).model_dump()
+            )
+        except Exception as e:
+            logger.warning(f"[WorkerManager] Failed to send job complete ack: {e}")
+
     async def _handle_job_complete(self, worker_id: str, msg: JobCompleteMessage):
         """Handle job completion from worker."""
         worker = self.workers.get(worker_id)
@@ -245,6 +256,7 @@ class WorkerManager:
             )
             worker.current_job_id = None
             worker.status = WorkerStatus.IDLE
+            await self._send_job_complete_ack(worker, job_id)
             await self._assign_next_job(worker_id)
             return
 
@@ -253,6 +265,8 @@ class WorkerManager:
             worker.current_job_id = None
             worker.status = WorkerStatus.IDLE
             logger.info(f"[WorkerManager] Job complete: {job_id} by {worker_id}")
+
+        await self._send_job_complete_ack(worker, job_id)
 
         # Assign next job if available
         await self._assign_next_job(worker_id)

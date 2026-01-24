@@ -322,6 +322,7 @@ class TestJobHandling:
         assert worker.status.value == "idle"
         assert worker.current_job_id is None
         assert worker.jobs_completed == 1
+        mock_websocket.send_json.assert_any_call({"type": "job_complete_ack", "job_id": job.job_id})
 
     @pytest.mark.asyncio
     async def test_handle_job_complete_unknown_worker(self, worker_manager):
@@ -334,6 +335,25 @@ class TestJobHandling:
 
         await worker_manager._handle_job_complete("unknown_worker", msg)
         # Should not raise any exception
+
+    @pytest.mark.asyncio
+    async def test_handle_job_complete_stale_job(self, worker_manager, mock_websocket):
+        """Test stale job completion sends ack and requeues worker."""
+        await worker_manager._register_worker(
+            mock_websocket, "worker_1", WorkerCapabilities(model="base", device="cuda", fp16=False)
+        )
+
+        msg = JobCompleteMessage(
+            type="job_complete",
+            job_id="missing_job",
+            result={"segments": []},
+        )
+
+        await worker_manager._handle_job_complete("worker_1", msg)
+
+        mock_websocket.send_json.assert_any_call(
+            {"type": "job_complete_ack", "job_id": "missing_job"}
+        )
 
     @pytest.mark.asyncio
     async def test_handle_job_progress(self, worker_manager, mock_websocket):

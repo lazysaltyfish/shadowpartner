@@ -61,14 +61,15 @@ async def health_check(request: Request):
     health_status = {
         "status": "healthy",
         "services": {
-            "transcriber": services_registry.transcriber is not None,
-            "analyzer": services_registry.analyzer is not None,
+            "worker_manager": services_registry.worker_manager is not None,
             "translator": services_registry.translator is not None,
             "task_manager": state.task_manager is not None,
         },
         "active_tasks": len(state.tasks),
-        "pending_transcription": (
-            services_registry.whisper_lock.locked() if services_registry.whisper_lock else False
+        "worker_available": (
+            services_registry.worker_manager.has_active_worker()
+            if services_registry.worker_manager
+            else False
         ),
     }
 

@@ -18,17 +18,3 @@ try:
     print("uvicorn imported successfully")
 except ImportError:
     print("uvicorn import failed")
-
-try:
-    import whisper  # noqa: F401
-
-    print("whisper imported successfully")
-except ImportError:
-    print("whisper import failed")
-
-try:
-    import MeCab  # noqa: F401
-
-    print("MeCab imported successfully")
-except ImportError:
-    print("MeCab import failed")

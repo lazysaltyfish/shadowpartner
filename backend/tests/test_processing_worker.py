@@ -1,8 +1,9 @@
-"""Tests for processing with worker (retry logic and fallback)."""
+"""Tests for processing with worker retry logic and error handling."""
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
@@ -19,11 +20,11 @@ class TestTranscribeWithWorker:
         from processing import transcribe_with_worker
 
         with patch("processing.services.worker_manager", None):
-            result = await transcribe_with_worker(
-                task_id="test_task",
-                file_path="/path/to/audio.mp3",
-            )
-            assert result is None
+            with pytest.raises(RuntimeError, match="Worker manager not available"):
+                await transcribe_with_worker(
+                    task_id="test_task",
+                    file_path="/path/to/audio.mp3",
+                )
 
     @pytest.mark.asyncio
     async def test_transcribe_with_worker_success_first_attempt(self):
@@ -139,15 +140,12 @@ class TestTranscribeWithWorker:
 
     @pytest.mark.asyncio
     async def test_transcribe_with_worker_no_workers_available(self):
-        """Test fallback when no workers are available."""
+        """Test error when no workers are available."""
         from processing import transcribe_with_worker
 
         # Mock services
         mock_worker_manager = Mock()
-        mock_worker_manager.submit_transcribe_job = AsyncMock(
-            side_effect=RuntimeError("No workers available")
-        )
-        mock_worker_manager.has_active_worker = Mock(return_value=True)
+        mock_worker_manager.has_active_worker = Mock(return_value=False)
 
         mock_storage_bridge = Mock()
         mock_storage_bridge.generate_presigned_url = Mock(
@@ -164,14 +162,13 @@ class TestTranscribeWithWorker:
                     with patch("processing._prepare_file_for_worker") as mock_prepare:
                         mock_prepare.return_value = ("/path/to/audio.mp3", False)
 
-                        result = await transcribe_with_worker(
-                            task_id="test_task",
-                            file_path="/path/to/audio.mp3",
-                        )
+                        with pytest.raises(RuntimeError, match="No workers available"):
+                            await transcribe_with_worker(
+                                task_id="test_task",
+                                file_path="/path/to/audio.mp3",
+                            )
 
-        # Should return None immediately (no retry)
-        assert result is None
-        mock_worker_manager.submit_transcribe_job.assert_called_once()
+        mock_worker_manager.submit_transcribe_job.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_transcribe_with_worker_all_retries_failed(self):
@@ -202,13 +199,12 @@ class TestTranscribeWithWorker:
                         mock_prepare.return_value = ("/path/to/audio.mp3", False)
 
                         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-                            result = await transcribe_with_worker(
-                                task_id="test_task",
-                                file_path="/path/to/audio.mp3",
-                            )
+                            with pytest.raises(RuntimeError, match="transcription failed"):
+                                await transcribe_with_worker(
+                                    task_id="test_task",
+                                    file_path="/path/to/audio.mp3",
+                                )
 
-        # Should return None after all retries
-        assert result is None
         assert mock_worker_manager.submit_transcribe_job.call_count == 2  # Default is 2 attempts
         assert mock_sleep.call_count == 1  # Sleep between attempts
 
@@ -247,13 +243,12 @@ class TestTranscribeWithWorker:
                         mock_prepare.return_value = ("/path/to/audio.mp3", False)
                         with patch("processing.get_settings", return_value=mock_settings):
                             with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-                                result = await transcribe_with_worker(
-                                    task_id="test_task",
-                                    file_path="/path/to/audio.mp3",
-                                )
+                                with pytest.raises(RuntimeError, match="transcription failed"):
+                                    await transcribe_with_worker(
+                                        task_id="test_task",
+                                        file_path="/path/to/audio.mp3",
+                                    )
 
-        # Should return None after all retries
-        assert result is None
         assert mock_worker_manager.submit_transcribe_job.call_count == 3
         assert mock_sleep.call_count == 2  # Sleep between attempts
 
@@ -288,13 +283,12 @@ class TestTranscribeWithWorker:
                             mock_cleanup.side_effect = Exception("Cleanup failed")
 
                             with patch("asyncio.sleep", new_callable=AsyncMock):
-                                result = await transcribe_with_worker(
-                                    task_id="test_task",
-                                    file_path="/path/to/audio.mp3",
-                                )
+                                with pytest.raises(RuntimeError, match="transcription failed"):
+                                    await transcribe_with_worker(
+                                        task_id="test_task",
+                                        file_path="/path/to/audio.mp3",
+                                    )
 
-        # Should still return None despite cleanup failure
-        assert result is None
         mock_cleanup.assert_called_once()
 
 
@@ -443,12 +437,52 @@ class TestWorkerTempDir:
                 _get_worker_temp_dir()
 
 
+class TestSaveWorkerThumbnail:
+    """Test _save_worker_thumbnail helper."""
+
+    @pytest.mark.asyncio
+    async def test_save_worker_thumbnail_success(self):
+        from processing import _save_worker_thumbnail
+
+        mock_storage = Mock()
+        mock_storage.save = AsyncMock(return_value="upload_thumb.jpg")
+
+        payload = base64.b64encode(b"thumb-bytes").decode("ascii")
+        result = await _save_worker_thumbnail(
+            task_id="task-1",
+            storage=mock_storage,
+            video_id="upload_abc123",
+            thumbnail_b64=payload,
+        )
+
+        assert result == "upload_abc123_thumb.jpg"
+        args, _ = mock_storage.save.call_args
+        assert args[1] == "upload_abc123_thumb.jpg"
+
+    @pytest.mark.asyncio
+    async def test_save_worker_thumbnail_invalid_payload(self):
+        from processing import _save_worker_thumbnail
+
+        mock_storage = Mock()
+        mock_storage.save = AsyncMock(return_value="upload_thumb.jpg")
+
+        result = await _save_worker_thumbnail(
+            task_id="task-1",
+            storage=mock_storage,
+            video_id="upload_abc123",
+            thumbnail_b64="not-base64",
+        )
+
+        assert result is None
+        mock_storage.save.assert_not_called()
+
+
 class TestTranscribeWithWorkerSettings:
     """Test transcribe_with_worker with different settings."""
 
     @pytest.mark.asyncio
     async def test_transcribe_with_worker_zero_retries(self):
-        """Test with zero retry attempts (immediate fallback)."""
+        """Test with zero retry attempts (immediate error)."""
         from processing import transcribe_with_worker
 
         # Mock services
@@ -478,11 +512,27 @@ class TestTranscribeWithWorkerSettings:
                     with patch("processing._prepare_file_for_worker") as mock_prepare:
                         mock_prepare.return_value = ("/path/to/audio.mp3", False)
                         with patch("processing.get_settings", return_value=mock_settings):
-                            result = await transcribe_with_worker(
-                                task_id="test_task",
-                                file_path="/path/to/audio.mp3",
-                            )
+                            with pytest.raises(RuntimeError, match="retries disabled"):
+                                await transcribe_with_worker(
+                                    task_id="test_task",
+                                    file_path="/path/to/audio.mp3",
+                                )
 
-        # Should return None immediately (no attempts)
-        assert result is None
         mock_worker_manager.submit_transcribe_job.assert_not_called()
+
+
+def test_build_analysis_texts_from_metadata():
+    """Test building analysis texts from deduplicated subtitle metadata."""
+    from processing import _build_analysis_texts
+
+    merged_text = "ABCDEF"
+    char_metadata = [
+        {"seg_idx": 0, "seg_start": 0.0, "seg_end": 1.0},
+        {"seg_idx": 0, "seg_start": 0.0, "seg_end": 1.0},
+        {"seg_idx": 1, "seg_start": 1.0, "seg_end": 2.0},
+        {"seg_idx": 1, "seg_start": 1.0, "seg_end": 2.0},
+        {"seg_idx": 2, "seg_start": 2.0, "seg_end": 3.0},
+        {"seg_idx": 2, "seg_start": 2.0, "seg_end": 3.0},
+    ]
+
+    assert _build_analysis_texts(merged_text, char_metadata) == ["AB", "CD", "EF"]

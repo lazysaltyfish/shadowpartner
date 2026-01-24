@@ -8,7 +8,7 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -16,9 +16,6 @@ import pytest
 @contextmanager
 def _mock_services_registry():
     settings = SimpleNamespace(
-        whisper_device=None,
-        whisper_fp16=False,
-        whisper_model_size="base",
         storage_root_dir="/tmp/storage",
         worker_api_tokens="{}",
         worker_heartbeat_interval=15,
@@ -27,19 +24,16 @@ def _mock_services_registry():
         backend_base_url="http://localhost:8000",
         temp_file_ttl=3600,
     )
-    transcriber_mock = Mock(device="cpu", fp16=False, model_size="base")
 
     with patch("services_registry.settings", settings):
         with patch("services_registry.logger"):
             with patch("services_registry.VideoDownloader"):
-                with patch("services_registry.AudioTranscriber", return_value=transcriber_mock):
-                    with patch("services_registry.JapaneseAnalyzer"):
-                        with patch("services_registry.Aligner"):
-                            with patch("services_registry.Translator"):
-                                with patch("services_registry.SubtitleLinearizer"):
-                                    with patch("services_registry.VocabularyAnalyzer"):
-                                        with patch("services_registry.LocalStorage"):
-                                            yield
+                with patch("services_registry.Aligner"):
+                    with patch("services_registry.Translator"):
+                        with patch("services_registry.SubtitleLinearizer"):
+                            with patch("services_registry.VocabularyAnalyzer"):
+                                with patch("services_registry.LocalStorage"):
+                                    yield
 
 
 class TestWorkerTempDir:

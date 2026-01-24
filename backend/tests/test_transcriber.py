@@ -5,7 +5,7 @@ import unittest
 # Add backend to sys path to import services
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services.transcriber import clean_whisper_text
+from services.subtitle_utils import clean_segments, clean_whisper_text
 
 
 class TestCleanWhisperText(unittest.TestCase):
@@ -68,12 +68,10 @@ class TestCleanWhisperText(unittest.TestCase):
 
 
 class TestCleanSegmentsIntegration(unittest.TestCase):
-    """Integration tests for segment cleaning in the transcriber."""
+    """Integration tests for segment cleaning helpers."""
 
     def test_clean_segments_basic(self):
         """Test basic segment cleaning functionality."""
-        from services.transcriber import AudioTranscriber
-
         # Create a mock result similar to Whisper output
         mock_result = {
             "segments": [
@@ -99,9 +97,7 @@ class TestCleanSegmentsIntegration(unittest.TestCase):
             ]
         }
 
-        # Create transcriber instance (without loading model)
-        transcriber = AudioTranscriber.__new__(AudioTranscriber)
-        transcriber._clean_segments(mock_result)
+        clean_segments(mock_result)
 
         # Check that brackets are removed from segments
         self.assertEqual(mock_result["segments"][0]["text"], "こんにちは世界")
@@ -117,8 +113,6 @@ class TestCleanSegmentsIntegration(unittest.TestCase):
 
     def test_clean_segments_all_empty(self):
         """Test that segments becoming entirely empty are handled."""
-        from services.transcriber import AudioTranscriber
-
         mock_result = {
             "segments": [
                 {
@@ -130,16 +124,13 @@ class TestCleanSegmentsIntegration(unittest.TestCase):
             ]
         }
 
-        transcriber = AudioTranscriber.__new__(AudioTranscriber)
-        transcriber._clean_segments(mock_result)
+        clean_segments(mock_result)
 
         # Entirely empty segment should be removed
         self.assertEqual(len(mock_result["segments"]), 0)
 
     def test_clean_segments_no_change(self):
         """Test that clean segments remain unchanged."""
-        from services.transcriber import AudioTranscriber
-
         mock_result = {
             "segments": [
                 {
@@ -154,9 +145,8 @@ class TestCleanSegmentsIntegration(unittest.TestCase):
             ]
         }
 
-        transcriber = AudioTranscriber.__new__(AudioTranscriber)
         original_segments = mock_result["segments"].copy()
-        transcriber._clean_segments(mock_result)
+        clean_segments(mock_result)
 
         # Should remain unchanged
         self.assertEqual(mock_result["segments"], original_segments)

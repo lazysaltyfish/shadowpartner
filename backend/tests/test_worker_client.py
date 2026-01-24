@@ -500,19 +500,80 @@ class TestWorkerClientCapabilityValidation:
         mock_transcriber = Mock()
         mock_transcriber.transcribe = AsyncMock(return_value={"segments": [], "language": "ja"})
 
+        mock_analyzer = Mock()
+        mock_analyzer.analyze = Mock(return_value=[])
+        mock_analyzer.analyze_batch = Mock(return_value=[])
+
         client.downloader = mock_downloader
         client.transcriber = mock_transcriber
+        client._get_analyzer = Mock(return_value=mock_analyzer)
 
         await client._handle_job_assigned(data)
 
         # Verify downloader was called
         mock_downloader.download.assert_called_once()
-        mock_downloader.cleanup.assert_called_once()
         mock_transcriber.transcribe.assert_called_once()
+        mock_downloader.cleanup.assert_not_called()
 
         # Verify job_complete was sent
         call_args = mock_ws.send.call_args[0][0]
         assert '"type": "job_complete"' in call_args
+
+        await client._handle_job_complete_ack({"job_id": "job_123"})
+        mock_downloader.cleanup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_job_assigned_with_analysis_texts(self):
+        """Test worker analysis_texts handling for subtitles."""
+        from worker.client import WhisperWorkerClient
+
+        client = WhisperWorkerClient()
+        mock_config = Mock()
+        mock_config.whisper_model_size = "base"
+        mock_config.whisper_fp16 = False
+        client.config = mock_config
+
+        mock_ws = Mock()
+        mock_ws.send = AsyncMock()
+        client.ws = mock_ws
+
+        data = {
+            "job_id": "job_123",
+            "audio_url": "http://example.com/audio.mp3",
+            "options": {"analysis_texts": ["test", "confirm"]},
+        }
+
+        mock_downloader = Mock()
+        mock_downloader.download = AsyncMock(return_value=("/path/to/audio.mp3", None))
+        mock_downloader.cleanup = AsyncMock()
+        mock_downloader.cleanup_old_files = AsyncMock()
+
+        mock_transcriber = Mock()
+        mock_transcriber.transcribe = AsyncMock(
+            return_value={"segments": [{"text": "test", "words": []}], "language": "ja"}
+        )
+
+        mock_analyzer = Mock()
+        mock_analyzer.analyze = Mock(return_value=[{"text": "test", "reading": "test"}])
+        mock_analyzer.analyze_batch = Mock(
+            return_value=[
+                [{"text": "test", "reading": "test"}],
+                [{"text": "confirm", "reading": "confirm"}],
+            ]
+        )
+
+        client.downloader = mock_downloader
+        client.transcriber = mock_transcriber
+        client._get_analyzer = Mock(return_value=mock_analyzer)
+
+        await client._handle_job_assigned(data)
+
+        call_args = mock_ws.send.call_args[0][0]
+        assert '"analysis_tokens"' in call_args
+        mock_downloader.cleanup.assert_not_called()
+
+        await client._handle_job_complete_ack({"job_id": "job_123"})
+        mock_downloader.cleanup.assert_called_once()
 
 
 class TestWorkerClientJobHandling:

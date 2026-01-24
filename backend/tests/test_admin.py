@@ -10,6 +10,7 @@ from db import get_session
 from db.crud import get_or_create_guest_user
 from db.models import Asset, AssetType, SubtitleSource, SubtitleTrack, SubtitleTrackType
 from main import create_app
+from settings import get_settings
 
 
 @pytest.fixture(scope="function")
@@ -119,8 +120,9 @@ def test_admin_login_invalid_credentials(client):
 
 def test_admin_login_missing_env(client, monkeypatch):
     """Test admin login when env vars not set."""
-    monkeypatch.delenv("ADMIN_USERNAME", raising=False)
-    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.setenv("ADMIN_USERNAME", "")
+    monkeypatch.setenv("ADMIN_PASSWORD", "")
+    get_settings.cache_clear()
 
     response = client.post("/api/admin/login", json={"username": "admin", "password": "admin"})
 

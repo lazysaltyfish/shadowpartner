@@ -19,7 +19,6 @@ from routers import (
     workers_router,
 )
 from utils.logger import get_logger
-from utils.path_setup import setup_local_bin_path
 
 logger = get_logger(__name__)
 
@@ -32,10 +31,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app(rate_limit_enabled_override: bool | None = None) -> FastAPI:
-    local_bin = setup_local_bin_path()
-    if local_bin:
-        logger.info(f"Added local bin to PATH: {local_bin}")
-
     cfg = settings.get_settings()
     limiter = get_limiter()
     rate_limit_enabled = (
