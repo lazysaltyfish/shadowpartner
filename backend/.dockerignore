@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dm.json
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Data and temp (should be volumes)
+data/
+storage/
+temp/
+tmp/
+*.tmp
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
+logs/
+
+# Environment files (use --env-file instead)
+.env
+.env.*
+!.env.example
+
+# Documentation
+*.md
+docs/
+
+# Tests (optional: remove if you want tests in image)
+tests/
+.pytest_cache/
+playwright-report/
+test-results/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Node modules (if any frontend build here)
+node_modules/
+
+# Large binaries
+bin/
+
+# UV specific
+uv.lock
+
+# Docker
+Dockerfile
+.dockerignore
