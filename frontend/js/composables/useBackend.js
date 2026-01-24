@@ -27,37 +27,41 @@ function useBackend() {
 
     /**
      * Resolve the backend base URL and initialize the API client.
+     *
+     * Rules:
+     * - No port in URL (e.g., https://example.com) -> same-origin deployment
+     * - With port (e.g., http://localhost:3000) -> backend on port 8000
+     * - Codespaces/Gitpod -> port-swapped backend
      */
     const resolveApiBaseUrl = () => {
         let baseUrl = 'http://localhost:8000';
+        const hostname = window.location.hostname;
+        const port = window.location.port;
+        const hasPort = port !== '';
 
-        // Codespaces & Remote Environment Handling
-        console.log('[Debug] Current Hostname:', window.location.hostname);
+        console.log('[Debug] Resolving API URL:', { hostname, port, hasPort });
 
-        if (window.location.hostname.includes('github.dev') || window.location.hostname.includes('gitpod.io')) {
-            // GitHub Codespaces: port 8080 is usually the frontend, backend on 8000
-            const currentHost = window.location.hostname;
-            console.log('[Debug] Detected Codespace/Gitpod environment');
-
-            // Attempt to replace ANY port number in the hostname with -8000
+        // Codespaces & Gitpod environment (port-swapped)
+        if (hostname.includes('github.dev') || hostname.includes('gitpod.io')) {
             const portRegex = /-([0-9]+)(?=\.app\.github\.dev|\.preview\.app\.github\.dev|\.gitpod\.io)/;
-            const match = currentHost.match(portRegex);
-
+            const match = hostname.match(portRegex);
             if (match) {
-                const currentPort = match[1];
-                console.log(`[Debug] Detected running on port: ${currentPort}`);
-                baseUrl = `https://${currentHost.replace(`-${currentPort}`, '-8000')}`;
-            } else if (currentHost.includes('-8080')) {
-                // Fallback for simple match
-                baseUrl = `https://${currentHost.replace('-8080', '-8000')}`;
-            } else {
-                console.warn('[Debug] Codespaces detected but port pattern not matched. Defaulting to localhost:8000. Host:', currentHost);
+                baseUrl = `https://${hostname.replace(`-${match[1]}`, '-8000')}`;
+            } else if (hostname.includes('-8080')) {
+                baseUrl = `https://${hostname.replace('-8080', '-8000')}`;
             }
-        } else if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-            // Generic remote handling (e.g. LAN)
-            baseUrl = window.location.protocol + '//' + window.location.hostname + ':8000';
         }
+        // No explicit port: same-origin deployment (Caddy reverse proxy)
+        else if (!hasPort) {
+            baseUrl = window.location.origin;
+        }
+        // Has port: backend on 8000 (dev/LAN setup)
+        else if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+            baseUrl = `${window.location.protocol}//${hostname}:8000`;
+        }
+        // localhost:3000 -> localhost:8000 (default baseUrl)
 
+        console.log('[Debug] Resolved API URL:', baseUrl);
         apiBaseUrl.value = baseUrl;
         API.setBaseUrl(apiBaseUrl.value);
         localStorage.removeItem('shadowpartner_api_url');

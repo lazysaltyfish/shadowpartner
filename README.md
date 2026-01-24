@@ -91,7 +91,8 @@ shadowpartner/
 │   ├── transcriber.py             # Whisper 包装器
 │   ├── downloader.py              # 音频下载器
 │   ├── config.py                  # 配置加载
-│   └── requirements.txt           # Worker 依赖
+│   ├── pyproject.toml             # Worker 依赖 (uv)
+│   └── requirements.txt           # 旧版依赖快照（可选）
 ├── frontend/
 │   ├── index.html                 # 主页面
 │   ├── js/
@@ -199,14 +200,15 @@ uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 ### 启动 GPU Worker（可选）
 
-GPU Worker 可以加速转录处理，自动回退到本地处理。
+GPU Worker 可以加速转录处理，后端需要 worker 在线才能处理任务。
 
 ```bash
 cd worker
 cp .env.example .env
 # 编辑 .env 文件配置后端地址和 Worker 凭证
-pip install -r requirements.txt
-python main.py
+pip install uv
+uv sync --no-dev
+uv run python main.py
 ```
 
 **Worker 配置 (.env)**:

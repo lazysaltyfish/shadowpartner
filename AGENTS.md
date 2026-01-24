@@ -22,14 +22,27 @@
 - **Line Length**: Maximum line length is set to **100** characters (configured in `backend/pyproject.toml`).
 - **Imports**: `isort` rules are enabled via Ruff for automatic import sorting.
 - **Strict Requirement**: AI assistants MUST ensure all code changes comply with these formatting and typing rules.
-- **Verification**: After making changes and before proposing a commit, you MUST run the following workflow to ensure code quality, formatting, and type safety across the entire backend:
+- **Verification**: After making changes and before proposing a commit, you MUST run the relevant workflows for each subproject you touched (backend/worker/frontend), plus Docker builds when Dockerfiles change:
   ```bash
-  # Check and fix linting errors
+  # Backend (required for backend changes)
   cd backend && uv run ruff check --fix .
-  # Format code
   cd backend && uv run ruff format .
   # Optionally run type check
   cd backend && uv run pyright
+  cd backend && uv run pytest tests/
+
+  # Worker (required for worker changes)
+  cd backend && uv run pytest tests/test_worker_client.py tests/test_worker_manager.py
+  # If worker gains its own tests:
+  # cd worker && python -m pytest tests/
+
+  # Frontend (required for frontend changes)
+  cd frontend && npm test
+
+  # Docker (when Dockerfiles change)
+  docker build -f backend/Dockerfile -t shadowpartner-backend .
+  docker build -f worker/Dockerfile -t shadowpartner-worker .
+  docker build -f frontend/Dockerfile -t shadowpartner-frontend .
   ```
 
 ### Backend Exception Handling
@@ -73,6 +86,8 @@
 - **Test Command**: Run `cd backend && uv run pytest tests/` to execute all tests.
 - **Strict Requirement**: AI assistants MUST run tests and ensure they all pass before proposing any commit.
 - **Warning Policy**: Warnings from project source code (non-test files) are NOT allowed and must be fixed. Warnings from test files (`tests/`) are acceptable and can be ignored.
+- **Settings Cache Note**: If a test mutates environment variables used by `get_settings()`, call
+  `settings.get_settings.cache_clear()` so the cached config refreshes.
 
 #### Frontend Tests (E2E with Playwright)
 - **Pre-commit Requirement**: All frontend tests MUST pass before committing frontend code changes.
@@ -113,12 +128,12 @@
 - **Video Player**: ArtPlayer
 - **Database**: SQLite with SQLModel (production-ready for PostgreSQL migration)
 - **Key Libraries**:
-  - openai-whisper (transcription)
+  - openai-whisper (worker-only transcription)
   - google-genai (translation via Gemini API)
-  - mecab-python3 + unidic-lite (Japanese NLP)
+  - mecab-python3 + unidic-lite (worker-only Japanese NLP)
   - yt-dlp (YouTube downloads)
   - tenacity (retry/backoff)
-  - FFmpeg (audio/video processing)
+  - FFmpeg (worker-only audio/video processing)
   - python-magic (file type/MIME detection)
   - slowapi (rate limiting for API endpoints)
   - limits (rate limiting library for slowapi)
@@ -160,12 +175,11 @@ db/                            # Database module
   ├── engine.py               # Database engine (SQLite setup)
   ├── models.py               # SQLModel models (User, Asset, SubtitleTrack, Playlist, PlaylistAsset)
   └── crud.py                # CRUD operations + admin CRUD functions (users/assets/subtitles)
-services_registry.py           # Service initialization + whisper lock (initialized on startup)
+services_registry.py           # Service initialization + worker manager wiring
 settings.py                    # Centralized environment settings loader (includes ADMIN_USERNAME/PASSWORD)
 validators.py                  # Upload file validation (size/type/mime)
 utils/
   ├── logger.py                # Logging
-  ├── path_setup.py            # PATH / local bin setup
   ├── resilience.py            # Retry/backoff helpers for external calls
   └── task_manager.py          # Async task helpers
 scripts/                       # Maintenance scripts
@@ -184,8 +198,7 @@ tests/                         # Unit tests
   └── test_cleanup_script.py # Database cleanup script unit tests
 services/
   ├── downloader.py            # YouTube/file download
-  ├── transcriber.py           # Whisper transcription
-  ├── analyzer.py              # Japanese morphological analysis
+  ├── subtitle_utils.py        # Subtitle parsing + Whisper text cleanup
   ├── aligner.py               # Timestamp alignment & calibration
   ├── translator.py            # Gemini translation
   ├── vocabulary_analyzer.py   # Gemini vocabulary extraction (N1/N2/Business)
@@ -201,12 +214,15 @@ data/                           # [NEW] Persistent data (git ignored)
 worker/                        # [NEW] Standalone GPU Worker client
   ├── main.py                # Worker entry point
   ├── client.py              # WebSocket client with auto-reconnect + heartbeat (websockets v12-safe)
+  ├── analyzer.py            # MeCab-based Japanese NLP (worker-only)
+  ├── text_utils.py          # Whisper text cleanup for worker results
   ├── transcriber.py         # Whisper wrapper with progress reporting
   ├── downloader.py          # Audio file downloader with cache
   ├── config.py              # Configuration loader
   ├── logger.py              # Logging setup
   ├── setup_ffmpeg.py         # Auto-install ffmpeg/ffprobe into worker/bin if missing
-  ├── requirements.txt       # Worker dependencies
+  ├── pyproject.toml         # Worker dependencies (uv)
+  ├── requirements.txt       # Legacy pip snapshot (optional)
   ├── .env.example           # Configuration template
   └── README.md              # Worker documentation
 ```
@@ -226,6 +242,17 @@ service-worker.js             # PWA offline support
 manifest.json                 # PWA config
 ```
 
+### Docker & Build
+- `backend/Dockerfile` - Backend image (Python + runtime deps)
+- `worker/Dockerfile` - Worker image (Python + ffmpeg)
+- `frontend/Dockerfile` - Nginx static frontend (port 3000)
+- `docs/deployment.md` - Deployment guide (Docker build/run + env wiring)
+- Backend data lives under `/app/data` (SQLite at `data/shadow.db`, files under `data/storage`)
+- `frontend/nginx.conf` - Nginx config for SPA routing
+- `backend/requirements.txt` - Backend runtime deps snapshot
+- `worker/pyproject.toml` - Worker deps (uv-managed)
+- `frontend/requirements.txt` - Frontend Python deps (none)
+
 ## Processing Pipeline
 
 ### Standard Pipeline (No User Subtitle)
@@ -234,8 +261,9 @@ Input (YouTube URL or File)
   → Check cache (SubtitleTrack DB)
   → [Cache hit] Return cached result
   → [Cache miss] Download audio/video (downloader.py)
-  → Transcribe with GPU Worker if available (worker/), else local (transcriber.py)
-  → Japanese morphological analysis + furigana (analyzer.py)
+  → Transcribe with GPU Worker (required; no backend fallback)
+  → [Worker offline] Task fails with error
+  → Japanese morphological analysis + furigana (worker MeCab)
   → Batch translate to Chinese (translator.py)
   → Vocabulary extraction (vocabulary_analyzer.py, Japanese-only)
   → Save to DB (SubtitleTrack table)
@@ -248,12 +276,12 @@ Input (YouTube URL or File)
 Input (File + User SRT Subtitle)
   → Check cache (SubtitleTrack DB)
   → [Cache hit] Return cached result
-  → [Cache miss] Whisper transcription for timing reference (transcriber.py)
-  → Load user subtitle (transcriber.py)
+  → [Cache miss] Whisper transcription for timing reference (worker-only)
+  → Load user subtitle (subtitle_utils.py)
   → Deduplicate scrolling subtitles (subtitle_linearizer.py)
   → Check similarity between AI and user subtitle (warns if < threshold)
   → Align & calibrate user subtitle with AI timestamps (aligner.py)
-  → Japanese morphological analysis + furigana (analyzer.py)
+  → Japanese morphological analysis + furigana (worker MeCab)
   → Batch translate to Chinese (translator.py)
   → Vocabulary extraction (vocabulary_analyzer.py, Japanese-only)
   → Save to DB (SubtitleTrack table)
@@ -274,6 +302,7 @@ Input (File + User SRT Subtitle)
   - Input: `{ "url": "youtube_url" }`
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - Triggers background download and processing
+  - **Worker Required**: Returns 503 if no worker is online
   - **Rate Limit**: 5 requests per minute (expensive operation)
 
 ### File Upload (Simple - for small files)
@@ -283,6 +312,7 @@ Input (File + User SRT Subtitle)
   - Validation: extension + MIME allowlist, max size 500MB
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - One-shot upload for files that can be sent in a single request
+  - **Worker Required**: Returns 503 if no worker is online
   - **Rate Limit**: 5 requests per minute (expensive upload)
   - **Session Limits**: Max 5 uploads per session, max 500MB total per session
 
@@ -292,6 +322,7 @@ Input (File + User SRT Subtitle)
   - Requires: `X-Session-Id` header (from `/api/session`)
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - Creates empty file and task entry
+  - **Worker Required**: Returns 503 if no worker is online
   - **Rate Limit**: 5 requests per minute (expensive operation)
   - **Session Limits**: Max 5 uploads per session, max 500MB total per session
 
@@ -317,6 +348,7 @@ Input (File + User SRT Subtitle)
   - Requires: `X-Session-Id` header (from `/api/session`)
   - Returns: `{ "task_id": "uuid", "message": "..." }`
   - Triggers background processing with optional subtitle
+  - **Worker Required**: Returns 503 if no worker is online
   - **Rate Limit**: 5 requests per minute (expensive operation)
   - **Session Limits**: Max 5 uploads per session, max 500MB total per session
 
@@ -668,11 +700,6 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 ## Environment Variables (.env)
 - `DATABASE_URL` - Database connection string (default: sqlite:///./data/shadow.db)
 - `STORAGE_ROOT_DIR` - Root directory for file storage (default: data/storage)
-- `WHISPER_DEVICE` - GPU/CPU selection (cuda/cpu/None for auto, default: None)
-- `WHISPER_FP16` - Half-precision inference (true/false, default: false)
-- `WHISPER_MODEL_SIZE` - Model size (tiny/base/small/medium/large, default: base)
-- `WHISPER_CONDITION_ON_PREVIOUS_TEXT` - Whether Whisper conditions on previous text (true/false, default: false). Setting to false reduces hallucinations and trailing text repetition, especially for Japanese content at end of audio files.
-- `WHISPER_HALLUCINATION_SILENCE_THRESHOLD` - Silence threshold in seconds to skip when hallucination is detected (optional, default: None). Only used when word_timestamps is enabled.
 - `GEMINI_API_KEY` - Google Gemini API key (required for translation)
 - `GEMINI_MODEL_ID` - Gemini model (default: gemini-3-flash-preview)
 - `TRANSLATE_BATCH_CHUNK_SIZE` - Translation batch size (default: 50)
@@ -696,15 +723,25 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 - `WORKER_HEARTBEAT_INTERVAL` - Worker heartbeat check interval in seconds (default: 15)
 - `WORKER_HEARTBEAT_TIMEOUT` - Worker heartbeat timeout in seconds (default: 30)
 - `WORKER_JOB_TIMEOUT` - Default job timeout in seconds (default: 600)
-- `WORKER_TEMP_DIR` - Temporary directory for worker file access (default: /tmp/shadowpartner_worker)
 - `WORKER_TRANSCRIBE_RETRY_ATTEMPTS` - Number of retry attempts for worker transcription (default: 2)
 - `BACKEND_BASE_URL` - Base URL for internal API (default: http://localhost:8000)
+- `TEMP_FILE_TTL` - Temporary file TTL in seconds (default: 3600)
+
+## Worker Environment Variables (.env)
+- `BACKEND_WS_URL` - Backend WebSocket URL (default: ws://localhost:8000/ws/worker)
+- `WORKER_TOKEN` - Worker auth token (must match WORKER_API_TOKENS)
+- `WORKER_ID` - Worker identifier (must match key in WORKER_API_TOKENS)
+- `WHISPER_MODEL_SIZE` - Whisper model size (tiny/base/small/medium/large, default: base)
+- `WHISPER_DEVICE` - GPU/CPU selection (cuda/cpu/None for auto, default: cuda)
+- `WHISPER_FP16` - Half-precision inference (true/false, default: false)
+- `AUDIO_CACHE_DIR` - Local cache directory for worker downloads (default: ./cache/audio)
+- `MAX_CACHE_SIZE_GB` - Max cache size in GB (default: 10)
 
 ## Key Features
 1. **Video Input**: YouTube URL or local file upload (drag-and-drop supported)
-2. **Audio Processing**: Download → Convert to MP3 → Whisper transcription
-3. **GPU Worker Support (NEW)**: Standalone GPU workers connect via WebSocket for faster transcription with automatic fallback to local processing
-4. **Japanese NLP**: MeCab morphological analysis + automatic furigana generation
+2. **Audio Processing**: Download → Worker transcription (format handled by worker)
+3. **GPU Worker Support (NEW)**: Standalone GPU workers connect via WebSocket for transcription (no backend fallback)
+4. **Japanese NLP**: MeCab morphological analysis + automatic furigana generation (worker)
 5. **Translation**: Batch translation via Google Gemini API
 6. **Subtitle Alignment**: Align AI timestamps with reference subtitles, handle scrolling duplicates
 7. **Interactive Playback**: Word-level highlighting, click-to-seek functionality
@@ -730,15 +767,15 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 - **Guest User Auto-Creation**: Session creation automatically generates User record in DB
 - **Deduplication**: Asset table uses unique constraint on (type, identifier) for fast duplicate detection
 - **Async Processing**: Long-running tasks use background processing with task IDs
+- **Worker Requirement**: Processing requires a connected worker; /api/process and upload init/complete return 503 when offline
 - **Settings**: Environment settings are centralized in `settings.py` and loaded once via `get_settings()`
 - **Thread Pool**: A single shared `ThreadPoolExecutor` is used for CPU-bound tasks and translation batching
 - **Background Tasks**: Managed by a TaskManager with a 5s drain window for graceful shutdown, then cancel
-- **Whisper Queue**: Transcription is serialized (1 at a time) for both CPU and GPU devices
 - **Download Offload**: YouTube downloads run in a background thread to avoid blocking the event loop
-- **Thread-Local MeCab**: Analyzer uses per-thread Tagger instances for safe concurrent NLP
+- **Thread-Local MeCab**: Worker analyzer uses per-thread Tagger instances for safe concurrent NLP
 - **Upload I/O**: Upload writes and file hashing are offloaded to threads; chunked uploads track per-task session state to handle retries, reject out-of-order chunks, and validate total chunks/size; expired upload sessions are cleaned by a TTL sweeper
-- **Upload Thumbnails**: ffmpeg generates a JPEG thumbnail for uploaded videos, stored as
-  `meta.thumbnail_path` and served via `/api/assets/{asset_id}/thumbnail` (tests in
+- **Upload Thumbnails**: Worker generates JPEG thumbnails via ffmpeg and returns base64 payload; backend stores
+  `meta.thumbnail_path` and serves via `/api/assets/{asset_id}/thumbnail` (tests in
   `backend/tests/test_stream_asset.py` and `backend/tests/test_admin.py`)
 - **Frontend State**: Input/upload UI hides once `videoData` is available so the player/subtitle view is uncluttered
 - **Furigana Logic**: Katakana → Hiragana conversion, handles special cases
@@ -805,12 +842,15 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
 - **GPU Worker Architecture** (2026-01): Distributed transcription using standalone GPU workers
 - **WebSocket Reverse Connection**: Workers connect to backend via WebSocket (`ws://backend:8000/ws/worker`)
   - **Authentication**: Token-based auth using `WORKER_API_TOKENS` JSON config (e.g., `{"gpu-worker-1": "secret-token"}`)
-  - **Job Flow**: Backend generates pre-signed URL → Worker downloads audio → Worker transcribes → Worker uploads result
+  - **Job Flow**: Backend generates pre-signed URL → Worker downloads file → Worker transcribes (+ optional thumbnail) → Worker sends result
   - **File Access**: `/api/internal/temp-file` streams storage-relative paths and worker temp absolute paths
+  - **Completion ACK**: Backend sends `job_complete_ack`; worker keeps cached audio until ack,
+    then cleans up (cached files are reused on retries)
   - **Fault Tolerance**: Heartbeat monitoring (15s interval, 30s timeout), auto-reconnect with exponential backoff (1s→30s), job retry (max 2)
   - **Progress Reporting**: Worker estimates progress based on audio duration and processing rate, forwarded to TaskInfo
-  - **Fallback**: Automatic fallback to local transcription if worker unavailable or fails
   - **Worker Management**: `/health` endpoint includes worker stats (connected/idle/busy workers, job queue status)
+  - **Startup Behavior**: Worker manager background tasks start only with a running event loop
+    (startup_event); script/test calls to `init_services()` skip task startup
   - **Files**: `backend/workers/` (server), `worker/` (standalone client)
   - **Environment Variables**:
     - `WORKER_WS_PORT`: WebSocket port (default: 8000, same as API)
@@ -818,7 +858,6 @@ python scripts/cleanup_database.py --force --cleanup-orphaned-users --user-age-t
     - `WORKER_HEARTBEAT_INTERVAL`: Heartbeat check interval (default: 15)
     - `WORKER_HEARTBEAT_TIMEOUT`: Worker timeout (default: 30)
     - `WORKER_JOB_TIMEOUT`: Job timeout (default: 600)
-    - `WORKER_TEMP_DIR`: Temp file directory (default: /tmp/shadowpartner_worker)
     - `WORKER_TRANSCRIBE_RETRY_ATTEMPTS`: Retry attempts (default: 2)
     - `BACKEND_BASE_URL`: Backend URL for worker (default: http://localhost:8000)
 
@@ -847,8 +886,9 @@ uv run python main.py --no-rate-limit --port 8000
 cd worker
 cp .env.example .env
 # Edit .env with your backend URL and worker credentials
-pip install -r requirements.txt
-python main.py
+pip install uv
+uv sync --no-dev
+uv run python main.py
 ```
 
 ## AI Workflow: Adding New APIs
@@ -879,9 +919,18 @@ async def new_endpoint(request: Request):  # request: Request is required for sl
 Ensure all tests pass before committing:
 ```bash
 cd backend
-uv run pytest tests/ -v
 uv run ruff format .
 uv run ruff check --fix .
+uv run pyright
+uv run pytest tests/ -v
+
+# If worker code changed
+uv run pytest tests/test_worker_client.py tests/test_worker_manager.py
+# If worker gains its own tests:
+# cd worker && python -m pytest tests/
+
+# If frontend code changed
+# cd frontend && npm test
 ```
 
 **Frontend**:

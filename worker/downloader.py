@@ -43,6 +43,15 @@ class AudioDownloader:
         """
         dest_path = self._get_cache_path(job_id, extension)
 
+        if os.path.exists(dest_path):
+            existing_size = os.path.getsize(dest_path)
+            if existing_size > 0:
+                logger.info(
+                    f"[Downloader] Using cached file: {dest_path} ({existing_size} bytes)"
+                )
+                return dest_path, existing_size
+            os.remove(dest_path)
+
         logger.info(f"[Downloader] Starting download: {url} -> {dest_path}")
 
         try:
