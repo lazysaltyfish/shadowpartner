@@ -1,7 +1,5 @@
 import hashlib
 import os
-import shutil
-import subprocess
 
 from utils.logger import get_logger
 
@@ -64,34 +62,3 @@ def get_video_source(video_id: str) -> str:
 
 def build_thumbnail_storage_path(video_id: str) -> str:
     return f"{video_id}_thumb.jpg"
-
-
-def generate_thumbnail(source_path: str, output_path: str, timestamp: float = 1.0) -> None:
-    ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path is None:
-        raise RuntimeError("ffmpeg not found in PATH")
-
-    capture_time = max(0.0, timestamp)
-    command = [
-        ffmpeg_path,
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-ss",
-        str(capture_time),
-        "-i",
-        source_path,
-        "-frames:v",
-        "1",
-        "-q:v",
-        "2",
-        "-vf",
-        "scale=640:-1",
-        "-an",
-        output_path,
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        error_text = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"ffmpeg thumbnail generation failed: {error_text}")

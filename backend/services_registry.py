@@ -9,12 +9,10 @@ import uuid
 from typing import Dict, Optional
 
 from services.aligner import Aligner
-from services.analyzer import JapaneseAnalyzer
 from services.downloader import VideoDownloader
 from services.storage.base import BaseStorage
 from services.storage.local import LocalStorage
 from services.subtitle_linearizer import SubtitleLinearizer
-from services.transcriber import AudioTranscriber
 from services.translator import Translator
 from services.vocabulary_analyzer import VocabularyAnalyzer
 from settings import get_settings
@@ -28,15 +26,11 @@ settings = get_settings()
 subtitle_similarity_threshold = settings.subtitle_similarity_threshold
 
 downloader: Optional[VideoDownloader] = None
-transcriber: Optional[AudioTranscriber] = None
-analyzer: Optional[JapaneseAnalyzer] = None
 aligner: Optional[Aligner] = None
 translator: Optional[Translator] = None
 subtitle_linearizer: Optional[SubtitleLinearizer] = None
 vocabulary_analyzer: Optional[VocabularyAnalyzer] = None
 storage: Optional[BaseStorage] = None
-whisper_lock: Optional[asyncio.Semaphore] = None
-whisper_lock_label = "transcription"
 
 # Worker instance ID (unique per backend instance for multi-instance deployments)
 worker_instance_id: str = ""
@@ -50,15 +44,11 @@ storage_bridge: Optional[StorageBridge] = None
 
 def init_services():
     global downloader
-    global transcriber
-    global analyzer
     global aligner
     global translator
     global subtitle_linearizer
     global vocabulary_analyzer
     global storage
-    global whisper_lock
-    global whisper_lock_label
     global worker_instance_id
     global worker_temp_dir
     global worker_manager
@@ -72,28 +62,14 @@ def init_services():
         )
         os.makedirs(worker_temp_dir, exist_ok=True)
         logger.info(f"Worker instance ID: {worker_instance_id}, temp dir: {worker_temp_dir}")
-        whisper_device = settings.whisper_device
-        whisper_fp16 = settings.whisper_fp16
-        whisper_model_size = settings.whisper_model_size
-
         logger.info("Initializing services...")
         downloader = VideoDownloader()
-        transcriber = AudioTranscriber(
-            model_size=whisper_model_size,
-            device=whisper_device,
-            fp16=whisper_fp16,
-        )
-        analyzer = JapaneseAnalyzer()
         aligner = Aligner()
         translator = Translator()
         subtitle_linearizer = SubtitleLinearizer()
         vocabulary_analyzer = VocabularyAnalyzer()
         storage = LocalStorage(root_dir=settings.storage_root_dir)
         logger.info(f"Local storage initialized: {settings.storage_root_dir}")
-        whisper_lock = asyncio.Semaphore(1)
-        if transcriber is not None:
-            whisper_lock_label = f"{transcriber.device.upper()} transcription"
-        logger.info("Whisper transcription queue enabled (1 at a time)")
 
         # Initialize worker services
         try:
@@ -110,10 +86,20 @@ def init_services():
                     heartbeat_timeout=settings.worker_heartbeat_timeout,
                     job_timeout=settings.worker_job_timeout,
                 )
-                worker_manager.start()
-                logger.info(
-                    f"Worker manager initialized with {len(worker_tokens)} registered worker(s)"
-                )
+                worker_count = len(worker_tokens)
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    logger.warning(
+                        "Worker manager init skipped (no running event loop); %s worker(s)",
+                        worker_count,
+                    )
+                else:
+                    worker_manager.start()
+                    logger.info(
+                        "Worker manager initialized with %s worker(s)",
+                        worker_count,
+                    )
             else:
                 logger.info("No GPU workers configured (WORKER_API_TOKENS is empty)")
         except Exception as e:
@@ -121,12 +107,7 @@ def init_services():
                 f"Failed to initialize worker manager: {e}. Workers will not be available."
             )
 
-        logger.info(
-            "All services initialized successfully. Transcriber running on %s (fp16=%s, model=%s)",
-            transcriber.device,
-            transcriber.fp16,
-            transcriber.model_size,
-        )
+        logger.info("All services initialized successfully.")
     except Exception as e:
         logger.critical(f"Failed to initialize services: {e}", exc_info=True)
 

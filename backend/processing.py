@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import difflib
+import io
 import os
 import re
 import shutil
-import tempfile
 import time
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from functools import partial
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import services_registry as services
 import state
@@ -24,7 +25,8 @@ from db.crud import (
 )
 from db.models import Asset, AssetType, SubtitleSource, SubtitleTrack, SubtitleTrackType
 from models import ProcessingMetrics, Segment, TaskStatus, VideoResponse, Word
-from services.video_utils import build_thumbnail_storage_path, generate_thumbnail, get_video_source
+from services.subtitle_utils import clean_segments, load_subtitle
+from services.video_utils import build_thumbnail_storage_path, get_video_source
 from settings import get_settings
 from uploads import release_upload_session
 from utils.logger import get_logger
@@ -47,7 +49,7 @@ def update_task(
     progress: int = 0,
     message: str = "",
     result=None,
-    error: str = None,
+    error: Optional[str] = None,
 ):
     state.update_task(task_id, status, progress, message, result=result, error=error)
 
@@ -56,8 +58,6 @@ def _ensure_services_initialized():
     if not all(
         [
             services.downloader,
-            services.transcriber,
-            services.analyzer,
             services.aligner,
             services.translator,
             services.subtitle_linearizer,
@@ -67,6 +67,23 @@ def _ensure_services_initialized():
         raise RuntimeError(
             "Services not initialized. Call services_registry.init_services() at startup."
         )
+
+
+def _build_analysis_texts(merged_text: str, char_metadata: List[Dict[str, Any]]) -> List[str]:
+    """Build per-segment texts from deduplicated subtitle data."""
+    if not merged_text or not char_metadata:
+        return []
+
+    segments_chars: Dict[int, List[str]] = defaultdict(list)
+    for char, meta in zip(merged_text, char_metadata):
+        segments_chars[meta["seg_idx"]].append(char)
+
+    texts = []
+    for seg_idx in sorted(segments_chars.keys()):
+        text = "".join(segments_chars[seg_idx]).strip()
+        if text:
+            texts.append(text)
+    return texts
 
 
 async def run_cpu_bound(func, *args, **kwargs):
@@ -146,211 +163,135 @@ async def _cleanup_worker_file(worker_path: str, is_temporary: bool):
         logger.warning(f"Failed to cleanup worker temp file {worker_path}: {e}")
 
 
+def _ensure_worker_available(task_id: str) -> None:
+    """Ensure worker manager is ready before submitting jobs."""
+    if not services.worker_manager or not services.storage_bridge:
+        update_task(task_id, TaskStatus.PROCESSING, 5, "Worker manager unavailable")
+        raise RuntimeError("Worker manager not available")
+    if not services.worker_manager.has_active_worker():
+        update_task(task_id, TaskStatus.PROCESSING, 5, "No workers available")
+        raise RuntimeError("No workers available")
+
+
 async def transcribe_with_worker(
     task_id: str,
     file_path: str,
     language: str = "ja",
-) -> Optional[dict]:
-    """Transcribe audio file using GPU worker.
-
-    Args:
-        task_id: Task ID for progress tracking
-        file_path: Path to audio file
-        language: Language code for transcription
-
-    Returns:
-        Transcription result dict with segments, language, language_probs
-        None if worker unavailable or transcription failed after retries
-    """
+    options: Optional[dict] = None,
+) -> dict:
+    """Transcribe audio file using GPU worker."""
     settings = get_settings()
+    _ensure_worker_available(task_id)
 
-    # Check if worker manager is available
-    if not services.worker_manager or not services.storage_bridge:
-        return None
+    worker_manager = services.worker_manager
+    storage_bridge = services.storage_bridge
+    assert worker_manager is not None
+    assert storage_bridge is not None
 
-    # Check if any worker is connected
-    if not services.worker_manager.has_active_worker():
-        logger.info(f"Task {task_id}: No workers available, using local transcription")
-        return None
+    retry_attempts = settings.worker_transcribe_retry_attempts
+    if retry_attempts <= 0:
+        raise RuntimeError("Worker transcription retries disabled")
 
     logger.info(f"Task {task_id}: Using GPU worker for transcription")
 
-    # Prepare file for worker access
-    worker_path, is_temporary = await _prepare_file_for_worker(file_path, task_id)
+    worker_path = ""
+    is_temporary = False
+    audio_url = ""
 
-    # Generate pre-signed URL
-    audio_url = services.storage_bridge.generate_presigned_url(
-        worker_path,
-        ttl_seconds=settings.temp_file_ttl,
-    )
+    try:
+        worker_path, is_temporary = await _prepare_file_for_worker(file_path, task_id)
+        audio_url = storage_bridge.generate_presigned_url(
+            worker_path,
+            ttl_seconds=settings.temp_file_ttl,
+        )
 
-    # Build job options
-    options = {"language": language}
+        job_options = {"language": language}
+        if options:
+            job_options.update(options)
 
-    retry_attempts = settings.worker_transcribe_retry_attempts
-
-    for attempt in range(retry_attempts):
-        try:
-            # Submit job to worker (10 minute timeout)
-            result = await services.worker_manager.submit_transcribe_job(
-                task_id=task_id,
-                audio_path=worker_path,
-                audio_url=audio_url,
-                timeout=settings.worker_job_timeout,
-                options=options,
-            )
-
-            # Revoke signature after job completes
-            services.storage_bridge.revoke_signature(worker_path)
-
+        for attempt in range(retry_attempts):
             try:
-                await _cleanup_worker_file(worker_path, is_temporary)
-            except Exception as e:
-                logger.warning(f"Task {task_id}: Cleanup failed for worker file {worker_path}: {e}")
-            return result
-
-        except RuntimeError as e:
-            if "No workers available" in str(e):
-                logger.info(f"Task {task_id}: Worker became unavailable, falling back")
+                result = await worker_manager.submit_transcribe_job(
+                    task_id=task_id,
+                    audio_path=worker_path,
+                    audio_url=audio_url,
+                    timeout=settings.worker_job_timeout,
+                    options=job_options,
+                )
+                clean_segments(result)
+                return result
+            except RuntimeError as e:
+                if "No workers available" in str(e):
+                    update_task(task_id, TaskStatus.PROCESSING, 10, "Worker unavailable")
+                    raise
+                logger.warning(
+                    f"Task {task_id}: Worker attempt {attempt + 1}/{retry_attempts} failed: {e}"
+                )
                 update_task(
                     task_id,
                     TaskStatus.PROCESSING,
                     10,
-                    "Worker unavailable, falling back to local transcription...",
+                    f"Worker error, retrying ({attempt + 1}/{retry_attempts})...",
                 )
-                break
-            logger.warning(
-                f"Task {task_id}: Worker attempt {attempt + 1}/{retry_attempts} failed: {e}"
-            )
-            update_task(
-                task_id,
-                TaskStatus.PROCESSING,
-                10,
-                f"Worker error, retrying ({attempt + 1}/{retry_attempts})...",
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"Task {task_id}: Worker attempt {attempt + 1}/{retry_attempts} timed out"
-            )
-            update_task(
-                task_id,
-                TaskStatus.PROCESSING,
-                10,
-                f"Worker timeout, retrying ({attempt + 1}/{retry_attempts})...",
-            )
-        except Exception as e:
-            logger.warning(
-                f"Task {task_id}: Worker attempt {attempt + 1}/{retry_attempts} failed: {e}"
-            )
-            update_task(
-                task_id,
-                TaskStatus.PROCESSING,
-                10,
-                f"Worker error, retrying ({attempt + 1}/{retry_attempts})...",
-            )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Task {task_id}: Worker attempt {attempt + 1}/{retry_attempts} timed out"
+                )
+                update_task(
+                    task_id,
+                    TaskStatus.PROCESSING,
+                    10,
+                    f"Worker timeout, retrying ({attempt + 1}/{retry_attempts})...",
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Task {task_id}: Worker attempt {attempt + 1}/{retry_attempts} failed: {e}"
+                )
+                update_task(
+                    task_id,
+                    TaskStatus.PROCESSING,
+                    10,
+                    f"Worker error, retrying ({attempt + 1}/{retry_attempts})...",
+                )
 
-        # If not the last attempt, wait a bit before retrying
-        if attempt < retry_attempts - 1:
-            await asyncio.sleep(1)
+            if attempt < retry_attempts - 1:
+                await asyncio.sleep(1)
 
-    # All attempts failed, clean up and fall back
-    logger.error(f"Task {task_id}: Worker transcription failed after {retry_attempts} attempts")
-    if services.storage_bridge:
-        services.storage_bridge.revoke_signature(worker_path)
-    try:
-        await _cleanup_worker_file(worker_path, is_temporary)
-    except Exception as e:
-        logger.warning(f"Task {task_id}: Cleanup failed for worker file {worker_path}: {e}")
-    return None
+        raise RuntimeError(f"Worker transcription failed after {retry_attempts} attempts")
+    finally:
+        if audio_url:
+            storage_bridge.revoke_signature(worker_path)
+        if worker_path:
+            try:
+                await _cleanup_worker_file(worker_path, is_temporary)
+            except Exception as e:
+                logger.warning(f"Task {task_id}: Cleanup failed for worker file {worker_path}: {e}")
 
 
-async def transcribe_local(
+async def _save_worker_thumbnail(
     task_id: str,
-    file_path: str,
-    language: str = "ja",
-) -> dict:
-    """Transcribe audio file using local Whisper.
-
-    Args:
-        task_id: Task ID for progress tracking
-        file_path: Path to audio file
-        language: Language code for transcription
-
-    Returns:
-        Transcription result dict with segments, language, language_probs
-    """
-    logger.info(f"Task {task_id}: Using local transcription")
-
-    if services.whisper_lock:
-        update_task(
-            task_id,
-            TaskStatus.PROCESSING,
-            5,
-            f"Waiting for {services.whisper_lock_label} slot...",
-        )
-        async with services.whisper_lock:
-            update_task(
-                task_id,
-                TaskStatus.PROCESSING,
-                10,
-                "Transcribing audio locally...",
-            )
-            result = await run_cpu_bound(
-                services.transcriber.transcribe,
-                file_path,
-                language=language,
-            )
-    else:
-        update_task(
-            task_id,
-            TaskStatus.PROCESSING,
-            10,
-            "Transcribing audio locally...",
-        )
-        result = await run_cpu_bound(
-            services.transcriber.transcribe,
-            file_path,
-            language=language,
-        )
-
-    return result
-
-
-async def _generate_upload_thumbnail(
-    task_id: str,
-    file_path: str,
-    video_id: str,
     storage,
+    video_id: str,
+    thumbnail_b64: Optional[str],
 ) -> Optional[str]:
-    temp_path = None
+    if not thumbnail_b64 or storage is None:
+        return None
+
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-            temp_path = tmp.name
+        thumb_bytes = base64.b64decode(thumbnail_b64)
+    except Exception as e:
+        logger.warning("Task %s: Invalid thumbnail payload: %s", task_id, e)
+        return None
 
-        await run_cpu_bound(generate_thumbnail, file_path, temp_path)
-        if not os.path.exists(temp_path):
-            logger.warning("Task %s: Thumbnail output missing", task_id)
-            return None
-
-        thumbnail_path = build_thumbnail_storage_path(video_id)
-        with open(temp_path, "rb") as thumb_file:
+    thumbnail_path = build_thumbnail_storage_path(video_id)
+    try:
+        with io.BytesIO(thumb_bytes) as thumb_file:
             await storage.save(thumb_file, thumbnail_path)
         logger.info("Task %s: Saved thumbnail to storage: %s", task_id, thumbnail_path)
         return thumbnail_path
     except Exception as e:
-        logger.warning("Task %s: Thumbnail generation failed: %s", task_id, e)
+        logger.warning("Task %s: Thumbnail save failed: %s", task_id, e)
         return None
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except OSError as e:
-                logger.warning(
-                    "Task %s: Failed to cleanup thumbnail temp %s: %s",
-                    task_id,
-                    temp_path,
-                    e,
-                )
 
 
 def check_subtitle_similarity(
@@ -687,11 +628,46 @@ async def process_audio_task(
     translation_time = 0.0
     has_word_timestamps = True  # Track if we have precise word-level timestamps
     warnings = []
+    asset_type = AssetType.UPLOAD if get_video_source(video_id) == "upload" else AssetType.YOUTUBE
 
     try:
         _ensure_services_initialized()
+        aligner = services.aligner
+        translator = services.translator
+        subtitle_linearizer = services.subtitle_linearizer
+        storage = services.storage
+        assert aligner is not None
+        assert translator is not None
+        assert subtitle_linearizer is not None
+        assert services.vocabulary_analyzer is not None
+        assert storage is not None
+
+        raw_reference_segments: List[Dict[str, Any]] = []
+        merged_text = ""
+        char_metadata: List[Dict[str, Any]] = []
+        analysis_texts: List[str] = []
+
+        if subtitle_path and os.path.exists(subtitle_path):
+            logger.info(f"Task {task_id}: Loading user-provided subtitle file")
+            ref_result = await run_cpu_bound(load_subtitle, subtitle_path)
+            raw_reference_segments = ref_result["segments"]
+            logger.info(
+                "Task %s: Loaded %s segments from user subtitle",
+                task_id,
+                len(raw_reference_segments),
+            )
+
+            logger.info(f"Task {task_id}: Deduplicating scrolling subtitles")
+            merged_text, char_metadata = subtitle_linearizer.deduplicate_with_metadata(
+                raw_reference_segments
+            )
+            logger.info(
+                "Task %s: Merged text length: %s chars",
+                task_id,
+                len(merged_text),
+            )
+            analysis_texts = _build_analysis_texts(merged_text, char_metadata)
         # 2. Transcribe (Always run AI for timing reference)
-        # Try GPU worker first, fall back to local transcription
         update_task(
             task_id,
             TaskStatus.PROCESSING,
@@ -702,14 +678,26 @@ async def process_audio_task(
         logger.info(f"Task {task_id}: Starting transcription for timing reference")
         t0 = time.time()
 
-        # Try worker first
-        gen_result = await transcribe_with_worker(task_id, file_path, language="ja")
+        transcribe_options: Dict[str, object] = {}
+        if asset_type == AssetType.UPLOAD:
+            transcribe_options["thumbnail"] = True
+            transcribe_options["thumbnail_timestamp"] = 1.0
+        if analysis_texts:
+            transcribe_options["analysis_texts"] = analysis_texts
 
-        # Fall back to local if worker unavailable or failed
-        if gen_result is None:
-            gen_result = await transcribe_local(task_id, file_path, language="ja")
+        gen_result = await transcribe_with_worker(
+            task_id,
+            file_path,
+            language="ja",
+            options=transcribe_options if transcribe_options else None,
+        )
 
         generated_segments = gen_result["segments"]
+        analysis_tokens = None
+        if analysis_texts:
+            analysis_tokens = gen_result.get("analysis_tokens")
+            if analysis_tokens is None:
+                raise RuntimeError("Worker did not return analysis_tokens")
         transcribe_time = time.time() - t0
         logger.info(
             "Task %s: Transcription completed in %.2fs",
@@ -720,34 +708,14 @@ async def process_audio_task(
         reference_segments = []
 
         # 3. Load & Calibrate User Subtitle (if provided)
-        if subtitle_path and os.path.exists(subtitle_path):
+        if subtitle_path and raw_reference_segments:
             update_task(
                 task_id,
                 TaskStatus.PROCESSING,
                 30,
                 "Loading and Calibrating User Subtitle...",
             )
-            logger.info(f"Task {task_id}: Loading user-provided subtitle file")
-
-            # Load Reference
-            ref_result = await run_cpu_bound(services.transcriber.load_subtitle, subtitle_path)
-            raw_reference_segments = ref_result["segments"]
-            logger.info(
-                "Task %s: Loaded %s segments from user subtitle",
-                task_id,
-                len(raw_reference_segments),
-            )
-
-            # Deduplicate scrolling subtitles with metadata tracking
-            logger.info(f"Task {task_id}: Deduplicating scrolling subtitles")
-            merged_text, char_metadata = services.subtitle_linearizer.deduplicate_with_metadata(
-                raw_reference_segments
-            )
-            logger.info(
-                "Task %s: Merged text length: %s chars",
-                task_id,
-                len(merged_text),
-            )
+            logger.info(f"Task {task_id}: Calibrating user-provided subtitles")
 
             # Check Similarity using merged text vs AI text
             logger.info(f"Task {task_id}: Checking subtitle similarity")
@@ -765,7 +733,7 @@ async def process_audio_task(
             # Calibrate timestamps using new method
             logger.info(f"Task {task_id}: Calibrating timestamps")
             _, char_timestamps = await run_cpu_bound(
-                services.aligner.calibrate_from_merged,
+                aligner.calibrate_from_merged,
                 merged_text,
                 char_metadata,
                 generated_segments,
@@ -773,7 +741,7 @@ async def process_audio_task(
 
             # Rebuild segments with calibrated timestamps
             logger.info(f"Task {task_id}: Rebuilding segments")
-            reference_segments = services.aligner.rebuild_segments_with_timestamps(
+            reference_segments = aligner.rebuild_segments_with_timestamps(
                 merged_text,
                 char_metadata,
                 char_timestamps,
@@ -791,6 +759,9 @@ async def process_audio_task(
             reference_segments = generated_segments
             has_word_timestamps = True
 
+        if analysis_tokens is not None and len(analysis_tokens) != len(reference_segments):
+            raise RuntimeError("Worker analysis_tokens length mismatch")
+
         update_task(task_id, TaskStatus.PROCESSING, 40, "Analyzing Japanese text...")
 
         # 4. Process Segments (Analyze & Align)
@@ -800,19 +771,24 @@ async def process_audio_task(
 
         # We can also offload the analysis loop if it's heavy, but let's see.
         # For now, let's keep it in the loop but yield control occasionally if needed.
-        # However, MeCab analysis IS CPU bound.
+        # Alignment remains CPU bound even after moving MeCab to the worker.
 
-        def analyze_segments(segments):
+        def analyze_segments(segments, segment_tokens):
             processed_segments = []
             texts = []
-            for seg in segments:
+            for idx, seg in enumerate(segments):
                 text = seg["text"].strip()
                 if not text:
                     continue
                 texts.append(text)
                 whisper_words = seg.get("words", [])
-                mecab_tokens = services.analyzer.analyze(text)
-                aligned_tokens = services.aligner.align(
+                if segment_tokens is None:
+                    mecab_tokens = seg.get("mecab_tokens")
+                    if mecab_tokens is None:
+                        raise RuntimeError("Worker did not provide mecab_tokens")
+                else:
+                    mecab_tokens = segment_tokens[idx] if idx < len(segment_tokens) else []
+                aligned_tokens = aligner.align(
                     whisper_words,
                     mecab_tokens,
                     segment_start=seg.get("start"),
@@ -842,7 +818,11 @@ async def process_audio_task(
 
         # Run analysis in thread
         t0 = time.time()
-        final_segments, raw_texts = await run_cpu_bound(analyze_segments, reference_segments)
+        final_segments, raw_texts = await run_cpu_bound(
+            analyze_segments,
+            reference_segments,
+            analysis_tokens,
+        )
         analysis_time = time.time() - t0
 
         update_task(task_id, TaskStatus.PROCESSING, 70, "Translating to Chinese...")
@@ -851,7 +831,7 @@ async def process_audio_task(
         logger.info(f"Task {task_id}: Translating {len(raw_texts)} segments")
         t0 = time.time()
         # Translation involves network I/O. We updated translator to be async and concurrent.
-        translations = await services.translator.translate_batch(raw_texts)
+        translations = await translator.translate_batch(raw_texts)
         translation_time = time.time() - t0
 
         failed_indices = [i for i, text in enumerate(translations) if is_translation_failure(text)]
@@ -918,16 +898,9 @@ async def process_audio_task(
         )
 
         source = SubtitleSource.USER_UPLOAD if subtitle_path else SubtitleSource.AI_GENERATED
-        asset_type = (
-            AssetType.UPLOAD if get_video_source(video_id) == "upload" else AssetType.YOUTUBE
-        )
         storage_path = None
         thumbnail_path = None
-        storage = services.storage
-
         if asset_type == AssetType.UPLOAD:
-            if storage is None:
-                raise RuntimeError("Storage service not initialized")
             if not file_path or not os.path.exists(file_path):
                 raise RuntimeError("Upload file missing; cannot persist result")
             try:
@@ -936,8 +909,12 @@ async def process_audio_task(
                     logger.info(f"Task {task_id}: Saved file to storage: {storage_path}")
             except Exception as e:
                 raise RuntimeError("Failed to save upload to storage") from e
-            thumbnail_path = await _generate_upload_thumbnail(task_id, file_path, video_id, storage)
-
+            thumbnail_path = await _save_worker_thumbnail(
+                task_id,
+                storage,
+                video_id,
+                gen_result.get("thumbnail_b64"),
+            )
             if thumbnail_path:
                 asset_meta = {**(asset_meta or {}), "thumbnail_path": thumbnail_path}
 
@@ -1022,11 +999,14 @@ async def download_and_process(task_id: str, url: str, is_admin_upload: bool = F
     temp_file = None
     try:
         _ensure_services_initialized()
+        _ensure_worker_available(task_id)
+        downloader = services.downloader
+        assert downloader is not None
         update_task(task_id, TaskStatus.PROCESSING, 5, "Downloading video...")
         logger.info(f"Task {task_id}: Downloading from URL: {url}")
 
         t0 = time.time()
-        temp_file, info = await asyncio.to_thread(services.downloader.download_audio, url)
+        temp_file, info = await asyncio.to_thread(downloader.download_audio, url)
         download_time = time.time() - t0
 
         video_title = info.get("title", "Unknown Video")
