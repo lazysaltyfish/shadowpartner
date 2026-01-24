@@ -1,10 +1,15 @@
 # Whisper GPU Worker Dependencies
+# Legacy snapshot; use pyproject.toml + uv for management.
 
 # WebSocket client
 websockets>=12.0
 
 # Whisper transcription
 openai-whisper>=20231117
+
+# Japanese NLP
+mecab-python3>=1.0.12
+unidic-lite>=1.0.8
 
 # Audio processing
 ffmpeg-python>=0.2.0

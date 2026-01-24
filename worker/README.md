@@ -12,8 +12,9 @@ Connects to the ShadowPartner backend via WebSocket.
 ## Installation
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies (uv)
+pip install uv
+uv sync --no-dev
 
 # Copy and configure environment
 cp .env.example .env
@@ -36,7 +37,7 @@ WHISPER_FP16=false       # true for GPU with FP16 support
 ## Running
 
 ```bash
-python main.py
+uv run python main.py
 ```
 
 The worker will:

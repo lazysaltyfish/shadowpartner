@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import os
+import tempfile
+from typing import Any
 
+import ffmpeg
 import websockets
 from config import load_config
 from downloader import AudioDownloader
 from logger import get_logger
+from text_utils import clean_segments
 from transcriber import WhisperTranscriber
 
 logger = get_logger(__name__)
@@ -56,6 +62,51 @@ async def _send_job_failed(ws: websockets.WebSocketClientProtocol, job_id: str, 
         logger.warning(f"Failed to send job_failed for {job_id}: connection closed")
 
 
+def _generate_thumbnail_b64(source_path: str, timestamp: float) -> str:
+    """Generate a JPEG thumbnail and return base64 payload."""
+    temp_path = None
+    capture_time = max(0.0, timestamp)
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+            temp_path = tmp.name
+
+        (
+            ffmpeg.input(source_path, ss=capture_time)
+            .output(
+                temp_path,
+                vframes=1,
+                qscale=2,
+                vf="scale=640:-1",
+                an=None,
+            )
+            .overwrite_output()
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+
+        with open(temp_path, "rb") as handle:
+            return base64.b64encode(handle.read()).decode("ascii")
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def _annotate_segments_with_mecab(analyzer: Any, segments: list[dict]) -> None:
+    """Attach mecab_tokens to each segment in-place."""
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        text = segment.get("text", "").strip()
+        if not text:
+            segment["mecab_tokens"] = []
+            continue
+        segment["mecab_tokens"] = analyzer.analyze(text)
+
+
+def _analyze_texts(analyzer: Any, texts: list[str]) -> list[list[dict]]:
+    """Analyze a list of texts into mecab token lists."""
+    return analyzer.analyze_batch(texts)
+
+
 class WhisperWorkerClient:
     """WebSocket client for GPU worker."""
 
@@ -77,7 +128,9 @@ class WhisperWorkerClient:
             device=self.config.whisper_device,
             fp16=self.config.whisper_fp16,
         )
+        self._analyzer = None
         self._running = False
+        self._pending_cleanup_jobs: set[str] = set()
 
     async def start(self):
         """Start the worker client (connect and run forever)."""
@@ -160,6 +213,8 @@ class WhisperWorkerClient:
 
                 if msg_type == "job_assigned":
                     await self._handle_job_assigned(data)
+                elif msg_type == "job_complete_ack":
+                    await self._handle_job_complete_ack(data)
                 elif msg_type == "heartbeat_ack":
                     pass  # Ignore ack
                 elif msg_type == "error":
@@ -219,6 +274,7 @@ class WhisperWorkerClient:
         async def send_message(msg: dict) -> None:
             await self.ws.send(json.dumps(msg))
 
+        sent_complete = False
         try:
             # Download audio
             audio_path, _ = await self.downloader.download(audio_url, job_id)
@@ -234,6 +290,35 @@ class WhisperWorkerClient:
                 language=options.get("language", "ja"),
             )
 
+            clean_segments(result)
+            analyzer = self._get_analyzer()
+            await asyncio.to_thread(
+                _annotate_segments_with_mecab,
+                analyzer,
+                result.get("segments", []),
+            )
+
+            analysis_texts = options.get("analysis_texts")
+            if isinstance(analysis_texts, list) and analysis_texts:
+                analysis_tokens = await asyncio.to_thread(
+                    _analyze_texts,
+                    analyzer,
+                    analysis_texts,
+                )
+                result["analysis_tokens"] = analysis_tokens
+
+            if options.get("thumbnail"):
+                timestamp = options.get("thumbnail_timestamp", 1.0)
+                try:
+                    thumbnail_b64 = await asyncio.to_thread(
+                        _generate_thumbnail_b64,
+                        audio_path,
+                        float(timestamp),
+                    )
+                    result["thumbnail_b64"] = thumbnail_b64
+                except Exception as e:
+                    logger.warning(f"Thumbnail generation failed for {job_id}: {e}")
+
             # Send result
             await self.ws.send(
                 json.dumps(
@@ -244,15 +329,35 @@ class WhisperWorkerClient:
                     }
                 )
             )
+            sent_complete = True
+            self._pending_cleanup_jobs.add(job_id)
             logger.info(f"Job complete: {job_id}")
 
         except Exception as e:
             logger.error(f"Job failed: {job_id} - {e}")
             await _send_job_failed(self.ws, job_id, str(e))
         finally:
-            # Cleanup
-            await self.downloader.cleanup(job_id)
+            if not sent_complete:
+                await self.downloader.cleanup(job_id)
             self.current_job_id = None
+
+    def _get_analyzer(self):
+        if self._analyzer is None:
+            from analyzer import JapaneseAnalyzer
+
+            self._analyzer = JapaneseAnalyzer()
+        return self._analyzer
+
+    async def _handle_job_complete_ack(self, data: dict) -> None:
+        job_id = data.get("job_id")
+        if not job_id:
+            logger.warning("Invalid job_complete_ack")
+            return
+        if job_id not in self._pending_cleanup_jobs:
+            logger.debug(f"Unexpected job_complete_ack for {job_id}")
+        await self.downloader.cleanup(job_id)
+        self._pending_cleanup_jobs.discard(job_id)
+        logger.info(f"Job cleanup acknowledged: {job_id}")
 
     async def _send_heartbeat(self):
         """Send periodic heartbeat messages."""
