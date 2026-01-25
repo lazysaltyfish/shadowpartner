@@ -1,6 +1,14 @@
 const { test, expect } = require('@playwright/test');
 
+const ADMIN_SESSION_ID = 'test-admin-session-123';
+
 test.describe('Upload Page', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript((adminSid) => {
+      localStorage.setItem('shadowpartner_admin_session_id', adminSid);
+    }, ADMIN_SESSION_ID);
+  });
+
   test('should load upload page with input form', async ({ page }) => {
     await page.goto('/#/upload');
 
@@ -19,8 +27,13 @@ test.describe('Upload Page', () => {
 });
 
 test.describe('Admin Upload Session Headers', () => {
-  const ADMIN_SESSION_ID = 'test-admin-session-123';
   const ADMIN_SESSION_HEADER = 'x-admin-session-id';
+
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript((adminSid) => {
+      localStorage.setItem('shadowpartner_admin_session_id', adminSid);
+    }, ADMIN_SESSION_ID);
+  });
 
   test('simple upload request should include admin session header when admin is logged in', async ({ page }) => {
     let capturedHeaders = null;
@@ -52,12 +65,6 @@ test.describe('Admin Upload Session Headers', () => {
         body: JSON.stringify({ status: 'processing', progress: 50, message: 'Processing...' })
       });
     });
-
-    // Navigate and set admin session
-    await page.goto('/');
-    await page.evaluate((adminSid) => {
-      localStorage.setItem('shadowpartner_admin_session_id', adminSid);
-    }, ADMIN_SESSION_ID);
 
     await page.goto('/#/upload');
     await page.waitForLoadState('networkidle');
@@ -112,12 +119,6 @@ test.describe('Admin Upload Session Headers', () => {
         body: JSON.stringify({ status: 'processing', progress: 50, message: 'Processing...' })
       });
     });
-
-    // Navigate and set admin session
-    await page.goto('/');
-    await page.evaluate((adminSid) => {
-      localStorage.setItem('shadowpartner_admin_session_id', adminSid);
-    }, ADMIN_SESSION_ID);
 
     await page.goto('/#/upload');
     await page.waitForLoadState('networkidle');

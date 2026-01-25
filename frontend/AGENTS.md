@@ -43,6 +43,9 @@ manifest.json
 
 ## Routing & UI Notes
 - Hash routes: `/` (home), `/upload`, `/admin`, `/play/{asset_id}`.
+- `/upload` is admin-only: non-admin access redirects to `/admin`, and the home
+  empty-state upload CTA is hidden unless `isAdminMode` is true.
+- Upload page includes a "返回管理" button for admin navigation back to `/admin`.
 - Play page uses `min-h-0` wrappers so subtitle/sidebars scroll without
   stretching the layout.
 - Player reloads reset playback/segment state; UI rendering gated on API/route

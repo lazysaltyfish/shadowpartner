@@ -586,6 +586,15 @@ createApp({
             return getCurrentDictationText(data);
         });
 
+        const goToUpload = () => {
+            if (!isAdminMode.value) {
+                showToast('请先登录管理员', 'warning');
+                Router.goToAdmin();
+                return;
+            }
+            Router.goToUpload();
+        };
+
         const backButtonLabel = computed(() => {
             switch (navigationContext.source) {
                 case 'playlist':
@@ -609,7 +618,7 @@ createApp({
                     items.push({ label: '管理', action: () => Router.goToAdmin() });
                     break;
                 case 'upload':
-                    items.push({ label: '上传', action: () => Router.goToUpload() });
+                    items.push({ label: '上传', action: () => goToUpload() });
                     break;
                 default:
                     items.push({ label: '首页', action: () => Router.goHome() });
@@ -808,6 +817,12 @@ createApp({
         };
 
         const handleRouteChange = (route, params) => {
+            if (route === 'upload' && !isAdminMode.value) {
+                showToast('请先登录管理员', 'warning');
+                Router.goToAdmin();
+                return;
+            }
+
             currentRoute.value = route;
 
             const routerContext = Router.getNavigationContext();
@@ -988,7 +1003,7 @@ createApp({
             playPageVisibleSegments,
             playPageHasWordTimestamps,
             goHome: () => Router.goHome(),
-            goToUpload: () => Router.goToUpload(),
+            goToUpload,
             goToPlay: (assetId, options = {}) => Router.goToPlay(assetId, options),
             goToAdmin: () => Router.goToAdmin(),
             goToPlaylistAsset,
