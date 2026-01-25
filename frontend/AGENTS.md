@@ -62,6 +62,7 @@ manifest.json
 - Mobile vocabulary bottom sheet supports drag-to-hide via the handle (pointer events); a quick tap on the handle also closes it.
 - When the sheet is closed on mobile, a small "词汇" pill reopens it; resizing to desktop restores the last sidebar tab automatically.
 - Play page Playwright tests cover mobile vocabulary sheet close/reopen and desktop restore behavior.
+- Home grid thumbnails enforce a fixed 16:9 ratio via inline padding-top + absolute media; grid uses auto-rows-max/content-start so cards don't compress and the grid scrolls.
 
 ## Testing Requirements (Playwright)
 ```bash
