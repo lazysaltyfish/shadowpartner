@@ -5,13 +5,27 @@ from __future__ import annotations
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
 
 import ffmpeg
-import whisper
 from logger import get_logger
 
+if TYPE_CHECKING:
+    import whisper
+
 logger = get_logger(__name__)
+
+_WHISPER_MODULE = None
+
+
+def _load_whisper():
+    """Lazy-load whisper to avoid import-time GPU initialization."""
+    global _WHISPER_MODULE
+    if _WHISPER_MODULE is None:
+        import whisper as whisper_module
+
+        _WHISPER_MODULE = whisper_module
+    return _WHISPER_MODULE
 
 
 class ProgressReporter:
@@ -117,13 +131,14 @@ class WhisperTranscriber:
         self.model_size = model_size
         self.device = device
         self.fp16 = fp16
-        self.model: Optional[whisper.Whisper] = None
+        self.model: Optional["whisper.Whisper"] = None
         self.executor = ThreadPoolExecutor(max_workers=1)
 
     def load_model(self):
         """Load Whisper model (blocking, call during startup)."""
         logger.info(f"[Transcriber] Loading model: {self.model_size} on {self.device}")
-        self.model = whisper.load_model(self.model_size, device=self.device)
+        whisper_module = _load_whisper()
+        self.model = whisper_module.load_model(self.model_size, device=self.device)
         logger.info("[Transcriber] Model loaded successfully")
 
     async def transcribe(
