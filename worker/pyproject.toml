@@ -18,5 +18,13 @@ dependencies = [
 dev = [
     "pyright>=1.1.408",
     "pytest>=8.3.0",
+    "pytest-asyncio>=0.23.0",
     "ruff>=0.14.11",
 ]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
