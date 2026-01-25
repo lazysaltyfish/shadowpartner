@@ -42,6 +42,10 @@ README.md              # Worker documentation
 - Worker dependencies are managed via `pyproject.toml` (uv).\n  `requirements.txt` is legacy-only.
 - MeCab tagger instances are thread-local to avoid cross-thread conflicts.
 - FFmpeg/ffprobe can be auto-installed into `worker/bin` if missing.
+- Whisper is lazy-imported in `transcriber.load_model()` to avoid GPU/torch init during test collection.
+- Worker tests stub the `whisper` module early in `worker/tests/conftest.py` to prevent accidental GPU use.
+- Worker tests force CPU-only runs by setting `CUDA_VISIBLE_DEVICES=""` and `PYTORCH_NO_CUDA=1` in `worker/tests/conftest.py`.
+- FFmpeg setup helpers are unit-tested in `worker/tests/test_setup_ffmpeg.py` without network downloads.
 
 ## Environment Variables (.env)
 - `BACKEND_WS_URL` - WebSocket URL (default: ws://localhost:8000/ws/worker)
@@ -59,6 +63,7 @@ README.md              # Worker documentation
 cd backend && uv run pytest tests/test_worker_client.py tests/test_worker_manager.py
 ```
 - If worker gains its own test suite, run from `worker/` as documented.
+- Heartbeat tests mock `ws.closed = False` and patch `asyncio.sleep` to avoid long waits.
 
 ## Running the Worker
 ```bash
