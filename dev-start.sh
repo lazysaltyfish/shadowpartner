@@ -126,6 +126,33 @@ start_services() {
     tmux attach-session -t "$SESSION"
 }
 
+# PID 文件清理和进程停止（用于 --no-tmux）
+kill_pidfile() {
+    local PIDFILE="$1"
+    local LABEL="$2"
+    if [ ! -f "$PIDFILE" ]; then
+        return
+    fi
+
+    local PID
+    PID="$(cat "$PIDFILE" 2>/dev/null | tr -d '[:space:]')"
+    if [ -z "$PID" ]; then
+        rm -f "$PIDFILE"
+        return
+    fi
+
+    if kill -0 "$PID" 2>/dev/null; then
+        echo -e "${YELLOW}停止 ${LABEL} (PID ${PID})...${NC}"
+        kill "$PID" 2>/dev/null || true
+        sleep 1
+        if kill -0 "$PID" 2>/dev/null; then
+            kill -9 "$PID" 2>/dev/null || true
+        fi
+    fi
+
+    rm -f "$PIDFILE"
+}
+
 # 显示帮助
 show_help() {
     cat << EOF
@@ -157,11 +184,21 @@ EOF
 # 停止服务
 kill_services() {
     local SESSION="shadowpartner"
+    local LOG_DIR="$PROJECT_ROOT/data/logs"
     if tmux has-session -t "$SESSION" 2>/dev/null; then
         echo -e "${YELLOW}停止服务...${NC}"
         tmux kill-session -t "$SESSION"
         echo -e "${GREEN}服务已停止${NC}"
-    else
+    fi
+
+    # 停止 --no-tmux 模式的后台进程
+    if [ -d "$LOG_DIR" ]; then
+        kill_pidfile "$LOG_DIR/backend.pid" "Backend"
+        kill_pidfile "$LOG_DIR/frontend.pid" "Frontend"
+        kill_pidfile "$LOG_DIR/worker.pid" "Worker"
+    fi
+
+    if ! tmux has-session -t "$SESSION" 2>/dev/null && [ ! -d "$LOG_DIR" ]; then
         echo -e "${YELLOW}没有运行中的服务${NC}"
     fi
 }
@@ -187,38 +224,44 @@ show_status() {
 # 不使用 tmux 的简单启动
 simple_start() {
     echo -e "${GREEN}简单启动模式 (日志输出到 data/logs/)${NC}"
-    mkdir -p "$PROJECT_ROOT/data/logs"
+    local LOG_DIR="$PROJECT_ROOT/data/logs"
+    mkdir -p "$LOG_DIR"
+
+    # 日志分隔符（避免覆盖旧日志）
+    echo "===== Backend start: $(date '+%Y-%m-%d %H:%M:%S') =====" >> "$LOG_DIR/backend.log"
+    echo "===== Frontend start: $(date '+%Y-%m-%d %H:%M:%S') =====" >> "$LOG_DIR/frontend.log"
+    echo "===== Worker start: $(date '+%Y-%m-%d %H:%M:%S') =====" >> "$LOG_DIR/worker.log"
 
     # 启动 backend
     echo "启动 Backend..."
     cd "$PROJECT_ROOT/backend"
     if command -v uv &> /dev/null; then
         uv run uvicorn main:app --host 0.0.0.0 --port 8000 \
-            > "$PROJECT_ROOT/data/logs/backend.log" 2>&1 &
+            >> "$LOG_DIR/backend.log" 2>&1 &
     else
         python main.py --port 8000 \
-            > "$PROJECT_ROOT/data/logs/backend.log" 2>&1 &
+            >> "$LOG_DIR/backend.log" 2>&1 &
     fi
-    echo $! > "$PROJECT_ROOT/data/logs/backend.pid"
+    echo $! > "$LOG_DIR/backend.pid"
 
     # 启动 frontend
     echo "启动 Frontend..."
     cd "$PROJECT_ROOT/frontend"
     python3 -m http.server 3000 \
-        > "$PROJECT_ROOT/data/logs/frontend.log" 2>&1 &
-    echo $! > "$PROJECT_ROOT/data/logs/frontend.pid"
+        >> "$LOG_DIR/frontend.log" 2>&1 &
+    echo $! > "$LOG_DIR/frontend.pid"
 
     # 启动 worker
     echo "启动 Worker..."
     cd "$PROJECT_ROOT/worker"
     if command -v uv &> /dev/null; then
         uv run python main.py \
-            > "$PROJECT_ROOT/data/logs/worker.log" 2>&1 &
+            >> "$LOG_DIR/worker.log" 2>&1 &
     else
         python main.py \
-            > "$PROJECT_ROOT/data/logs/worker.log" 2>&1 &
+            >> "$LOG_DIR/worker.log" 2>&1 &
     fi
-    echo $! > "$PROJECT_ROOT/data/logs/worker.pid"
+    echo $! > "$LOG_DIR/worker.pid"
 
     echo -e "${GREEN}所有服务已启动${NC}"
     echo ""
