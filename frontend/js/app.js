@@ -266,6 +266,36 @@ createApp({
         // Route ready flag - start as true, only false during transitions
         const routeReady = ref(true);
 
+        // Home grid infinite scroll
+        const homeGridRef = ref(null);
+        const HOME_SCROLL_THRESHOLD = 240;
+
+        const handleHomeGridScroll = () => {
+            const container = homeGridRef.value;
+            if (!container || homeLoading.value || !homeHasMore.value) {
+                return;
+            }
+            const remaining = container.scrollHeight - container.scrollTop - container.clientHeight;
+            if (remaining < HOME_SCROLL_THRESHOLD) {
+                loadHomeAssets(true);
+            }
+        };
+
+        const ensureHomeGridFilled = () => {
+            if (currentRoute.value !== 'home') {
+                return;
+            }
+            nextTick(() => {
+                const container = homeGridRef.value;
+                if (!container || homeLoading.value || !homeHasMore.value) {
+                    return;
+                }
+                if (container.scrollHeight <= container.clientHeight + 8) {
+                    loadHomeAssets(true);
+                }
+            });
+        };
+
         const getPointerClientY = (event) => {
             if (event.touches && event.touches.length) {
                 return event.touches[0].clientY;
@@ -955,6 +985,16 @@ createApp({
             }
         };
 
+        watch([homeAssets, homeHasMore, homeLoading], () => {
+            ensureHomeGridFilled();
+        });
+
+        watch(currentRoute, (nextRoute) => {
+            if (nextRoute === 'home') {
+                ensureHomeGridFilled();
+            }
+        });
+
         // ========================================================================
         // ADMIN UPLOAD EDIT MODAL
         // ========================================================================
@@ -1132,7 +1172,8 @@ createApp({
             homeAssets,
             homeLoading,
             homeHasMore,
-            loadMoreAssets: () => loadHomeAssets(true),
+            homeGridRef,
+            handleHomeGridScroll,
 
             // Admin mode state
             isAdminMode,

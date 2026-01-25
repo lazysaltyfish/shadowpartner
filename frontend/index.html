@@ -27,7 +27,7 @@
                 <div class="h-6 bg-gray-200 rounded-full animate-pulse w-32 mx-auto mt-2"></div>
             </div>
             <!-- Video grid skeleton -->
-            <div class="flex-1 min-h-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 overflow-y-auto pb-4 auto-rows-max content-start">
+            <div class="flex-1 min-h-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 overflow-y-auto pb-4 auto-rows-max content-start no-scrollbar">
                 <div v-for="i in 8" :key="'skeleton-' + i" class="bg-white rounded-lg shadow-md overflow-hidden">
                     <div class="bg-gray-200 animate-pulse overflow-hidden" style="position: relative; width: 100%; padding-top: 56.25%;"></div>
                     <div class="p-3 space-y-2">
@@ -62,7 +62,7 @@
         <!-- Home Page: Video Grid -->
         <div v-if="currentRoute === 'home'" class="flex-1 flex flex-col min-h-0 overflow-hidden">
             <!-- Grid -->
-            <div v-if="homeAssets.length > 0" class="flex-1 min-h-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 overflow-y-auto pb-4 auto-rows-max content-start">
+            <div v-if="homeAssets.length > 0" ref="homeGridRef" @scroll.passive="handleHomeGridScroll" class="flex-1 min-h-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 overflow-y-auto pb-4 auto-rows-max content-start no-scrollbar">
                 <div v-for="asset in homeAssets" :key="asset.id"
                      @click="goToPlay(asset.id)"
                      class="bg-white rounded-lg shadow-md overflow-hidden cursor-pointer hover:shadow-lg transition-shadow">
@@ -82,15 +82,8 @@
                     </div>
                 </div>
             </div>
-            <!-- Load More -->
-            <div v-if="homeHasMore && homeAssets.length > 0" class="py-4 text-center">
-                <button @click="loadMoreAssets" :disabled="homeLoading"
-                        class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
-                    {{ homeLoading ? '加载中...' : '加载更多' }}
-                </button>
-            </div>
             <!-- Loading Skeleton -->
-            <div v-if="homeLoading && homeAssets.length === 0" class="flex-1 min-h-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 overflow-y-auto pb-4 auto-rows-max content-start">
+            <div v-if="homeLoading && homeAssets.length === 0" class="flex-1 min-h-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 overflow-y-auto pb-4 auto-rows-max content-start no-scrollbar">
                 <div v-for="i in 8" :key="'home-skeleton-' + i" class="bg-white rounded-lg shadow-md overflow-hidden">
                     <div class="bg-gray-200 animate-pulse overflow-hidden" style="position: relative; width: 100%; padding-top: 56.25%;"></div>
                     <div class="p-3 space-y-2">

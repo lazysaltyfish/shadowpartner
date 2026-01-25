@@ -71,3 +71,14 @@ ruby rt {
   overflow: hidden !important;
   background: #000 !important;
 }
+
+/* Hide scrollbars while keeping scroll enabled */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
