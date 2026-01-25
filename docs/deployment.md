@@ -28,6 +28,7 @@ Backend:
 - `WORKER_API_TOKENS` (required JSON map, example below)
 - `BACKEND_BASE_URL` (required; reachable by worker, e.g. `http://backend:8000`)
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD` (recommended for admin UI)
+- `CLI_MAGIC_TOKEN` (optional; enables automation via `X-CLI-Token`)
 
 Worker:
 - `BACKEND_WS_URL` (required, e.g. `ws://backend:8000/ws/worker`)
