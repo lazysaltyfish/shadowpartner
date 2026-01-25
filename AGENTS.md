@@ -30,6 +30,8 @@ word-level timing, furigana, and Chinese translations.
 ## Architecture Overview
 - **Backend** exposes REST endpoints, manages auth sessions, database, storage,
   and task orchestration.
+- **Backend** accepts `X-CLI-Token` (when `CLI_MAGIC_TOKEN` is set) for automation
+  tooling to bypass session creation and rate limiting.
 - Admin subtitle track listings include `asset_title` for frontend display when available.
 - Ingestion endpoints (`/api/process`, `/api/upload*`) are admin-only; admin asset responses no longer include uploader fields.
 - **Worker** connects via WebSocket for transcription/NLP/thumbnail generation;
@@ -48,6 +50,7 @@ word-level timing, furigana, and Chinese translations.
 - `backend/` - API server and data pipeline
 - `frontend/` - PWA UI
 - `worker/` - GPU worker client
+- `tools/` - Automation tools (CLI integrations)
 - `docs/` - Deployment and documentation
 - `data/` - Runtime data (git ignored)
 

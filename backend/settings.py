@@ -87,6 +87,7 @@ class Settings:
     auth_session_max_total_size: int
     admin_username: Optional[str]
     admin_password: Optional[str]
+    cli_magic_token: Optional[str]
     # Storage configuration
     storage_root_dir: str
     # Worker configuration
@@ -129,6 +130,7 @@ def get_settings() -> Settings:
         auth_session_max_total_size=_parse_int("AUTH_SESSION_MAX_TOTAL_SIZE", 524288000),
         admin_username=_get_env("ADMIN_USERNAME"),
         admin_password=_get_env("ADMIN_PASSWORD"),
+        cli_magic_token=_get_env("CLI_MAGIC_TOKEN"),
         storage_root_dir=_get_env("STORAGE_ROOT_DIR") or "data/storage",
         # Worker settings
         worker_ws_port=_parse_int("WORKER_WS_PORT", 8000),

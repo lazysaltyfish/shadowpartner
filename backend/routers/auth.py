@@ -1,7 +1,7 @@
 """Authenticated API routes - requires X-Session-Id + X-Admin-Session-Id headers.
 
 This module contains endpoints for file upload and processing that require
-an auth session and an admin session.
+an auth session and an admin session. X-CLI-Token may be used when configured.
 """
 
 from __future__ import annotations

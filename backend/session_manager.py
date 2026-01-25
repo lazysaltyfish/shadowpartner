@@ -11,6 +11,7 @@ import state
 from db.models import User
 from models import AdminLoginRequest, AuthSession
 from settings import get_settings
+from utils.cli_token import is_cli_token_valid
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -18,6 +19,32 @@ logger = get_logger(__name__)
 settings = get_settings()
 AUTH_SESSION_SWEEP_SECONDS = 60
 ADMIN_SESSION_SWEEP_SECONDS = 300  # 5 minutes
+CLI_AUTH_SESSION_ID = "cli-session"
+CLI_ADMIN_SESSION_ID = "cli-admin"
+
+
+def _build_cli_auth_session(request: Request) -> AuthSession:
+    created_at = time.time()
+    expires_at = created_at + settings.auth_session_ttl_seconds
+    ip_address = request.client.host if request.client else "cli"
+    return AuthSession(
+        session_id=CLI_AUTH_SESSION_ID,
+        ip_address=ip_address,
+        created_at=created_at,
+        expires_at=expires_at,
+        user_id=uuid.UUID(int=0),
+        is_cli=True,
+    )
+
+
+def _build_cli_admin_session() -> AdminSession:
+    created_at = time.time()
+    expires_at = created_at + 86400
+    return AdminSession(
+        session_id=CLI_ADMIN_SESSION_ID,
+        username="cli",
+        expires_at=expires_at,
+    )
 
 
 def create_session(ip_address: str, user: User) -> AuthSession:
@@ -70,6 +97,8 @@ async def update_session_upload(
 
     Checks limits BEFORE incrementing to ensure accurate enforcement.
     """
+    if session.is_cli:
+        return True
     async with session.lock:
         if time.time() > session.expires_at:
             return False
@@ -119,9 +148,13 @@ def cleanup_expired_sessions() -> int:
 
 
 async def get_current_session_optional(
-    request: Request, session_id: Optional[str] = Header(None, alias="X-Session-Id")
+    request: Request,
+    session_id: Optional[str] = Header(None, alias="X-Session-Id"),
+    cli_token: Optional[str] = Header(None, alias="X-CLI-Token"),
 ) -> Optional[AuthSession]:
     """Optional session validation - returns None if not provided, raises if invalid."""
+    if is_cli_token_valid(cli_token):
+        return _build_cli_auth_session(request)
     if not session_id:
         return None
 
@@ -148,7 +181,9 @@ async def sweep_auth_sessions():
 
 
 async def get_current_session(
-    request: Request, session_id: Optional[str] = Header(None, alias="X-Session-Id")
+    request: Request,
+    session_id: Optional[str] = Header(None, alias="X-Session-Id"),
+    cli_token: Optional[str] = Header(None, alias="X-CLI-Token"),
 ) -> AuthSession:
     """FastAPI dependency to validate auth session from header.
 
@@ -158,6 +193,11 @@ async def get_current_session(
     # Check cache first
     if hasattr(request.state, "_auth_session"):
         return request.state._auth_session
+
+    if is_cli_token_valid(cli_token):
+        session = _build_cli_auth_session(request)
+        request.state._auth_session = session
+        return session
 
     if not session_id:
         raise HTTPException(status_code=401, detail="Session required")
@@ -261,7 +301,9 @@ def invalidate_admin_session(session_id: str) -> bool:
 
 
 async def get_current_admin_session(
-    request: Request, session_id: Optional[str] = Header(None, alias="X-Admin-Session-Id")
+    request: Request,
+    session_id: Optional[str] = Header(None, alias="X-Admin-Session-Id"),
+    cli_token: Optional[str] = Header(None, alias="X-CLI-Token"),
 ) -> AdminSession:
     """FastAPI dependency to validate admin session from header.
 
@@ -282,6 +324,11 @@ async def get_current_admin_session(
     if hasattr(request.state, "_admin_session"):
         return request.state._admin_session
 
+    if is_cli_token_valid(cli_token):
+        session = _build_cli_admin_session()
+        request.state._admin_session = session
+        return session
+
     if not session_id:
         raise HTTPException(status_code=401, detail="Admin session required")
 
@@ -295,7 +342,9 @@ async def get_current_admin_session(
 
 
 async def get_current_admin_session_optional(
-    request: Request, session_id: Optional[str] = Header(None, alias="X-Admin-Session-Id")
+    request: Request,
+    session_id: Optional[str] = Header(None, alias="X-Admin-Session-Id"),
+    cli_token: Optional[str] = Header(None, alias="X-CLI-Token"),
 ) -> Optional[AdminSession]:
     """FastAPI dependency to optionally validate admin session from header.
 
@@ -306,6 +355,9 @@ async def get_current_admin_session_optional(
     Returns:
         AdminSession if valid, None if missing or invalid (no exception raised)
     """
+    if is_cli_token_valid(cli_token):
+        return _build_cli_admin_session()
+
     if not session_id:
         return None
 

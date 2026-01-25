@@ -124,6 +124,9 @@ Input (File + User SRT Subtitle)
 - `POST /api/session` - Create anonymous session for upload access
   - Returns: `{ "session_id": "uuid", "expires_at": 1234567890 }`
   - Rate limit: 10 requests/min/IP
+- `X-CLI-Token` - Optional automation header (when `CLI_MAGIC_TOKEN` is set)
+  - Maps to both auth/admin sessions internally (no need to call `/api/session` or `/api/admin/login`)
+  - Bypasses rate limiting and upload session caps for CLI tooling
 
 ### Video Processing
 - `POST /api/process` - Process YouTube video by URL (async)
@@ -206,6 +209,7 @@ Admin endpoints (require `X-Admin-Session-Id`):
 - Upload sessions enforce per-session limits, reject out-of-order chunks, and
   are swept by a TTL sweeper.
 - Ingestion endpoints (`/api/process`, `/api/upload*`) require admin sessions.
+- Ingestion endpoints accept `X-CLI-Token` when `CLI_MAGIC_TOKEN` is configured.
 - Assets no longer track uploader; `created_by` is deprecated and not returned by admin APIs.
 - Worker-generated JPEG thumbnails are stored as `meta.thumbnail_path` and
   served from `/api/assets/{asset_id}/thumbnail`.
@@ -215,6 +219,7 @@ Admin endpoints (require `X-Admin-Session-Id`):
 - Rate limiting uses slowapi; key limits: `/api/process` 5/min,
   `/api/upload*` 5/min (10/min for subtitle, 300/min for chunks),
   `/api/status` 120/min, `/` and `/health` exempt.
+- Requests with `X-CLI-Token` bypass rate limiting.
 - Anonymous sessions enforce max 5 uploads and 500MB total; sessions expire
   after 1 hour by default.
 - Admin sessions use 24-hour TTL and are cleaned every 5 minutes.
@@ -419,6 +424,7 @@ Use `--dry-run` by default; `--force` is required for deletion.
 - `AUTH_SESSION_MAX_TOTAL_SIZE` - Default 524288000
 - `ADMIN_USERNAME` - Required for admin access
 - `ADMIN_PASSWORD` - Required for admin access
+- `CLI_MAGIC_TOKEN` - Optional automation token for `X-CLI-Token`
 - `WORKER_WS_PORT` - WebSocket port (default 8000)
 - `WORKER_API_TOKENS` - JSON mapping worker_id:token
 - `WORKER_HEARTBEAT_INTERVAL` - Default 15

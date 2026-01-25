@@ -49,6 +49,7 @@ class AuthSession:
     created_at: float
     expires_at: float
     user_id: uuid.UUID  # Links to DB User
+    is_cli: bool = False
     upload_count: int = 0
     total_size: int = 0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
