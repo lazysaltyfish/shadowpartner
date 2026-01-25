@@ -244,6 +244,16 @@ createApp({
         const playlistContext = ref(null);
         const playlistContextLoading = ref(false);
         const sidebarTab = ref(null); // 'playlist' | 'vocabulary' | null
+        const lastSidebarTab = ref(null);
+        const vocabSheet = ref(null);
+        const vocabSheetDrag = reactive({
+            active: false,
+            startY: 0,
+            offsetY: 0,
+            height: 0,
+            wasDragged: false
+        });
+        const layoutIsDesktop = ref(false);
 
         // Navigation context for Play page
         const navigationContext = reactive({
@@ -255,6 +265,89 @@ createApp({
 
         // Route ready flag - start as true, only false during transitions
         const routeReady = ref(true);
+
+        const getPointerClientY = (event) => {
+            if (event.touches && event.touches.length) {
+                return event.touches[0].clientY;
+            }
+            if (event.changedTouches && event.changedTouches.length) {
+                return event.changedTouches[0].clientY;
+            }
+            return event.clientY;
+        };
+
+        const onVocabSheetDragStart = (event) => {
+            if (!vocabSheet.value) {
+                return;
+            }
+            if (event.cancelable) {
+                event.preventDefault();
+            }
+            vocabSheetDrag.active = true;
+            vocabSheetDrag.wasDragged = false;
+            vocabSheetDrag.startY = getPointerClientY(event);
+            vocabSheetDrag.offsetY = 0;
+            vocabSheetDrag.height = vocabSheet.value.getBoundingClientRect().height;
+            if (event.currentTarget && event.currentTarget.setPointerCapture && event.pointerId !== undefined) {
+                event.currentTarget.setPointerCapture(event.pointerId);
+            }
+        };
+
+        const onVocabSheetDragMove = (event) => {
+            if (!vocabSheetDrag.active) {
+                return;
+            }
+            if (event.cancelable) {
+                event.preventDefault();
+            }
+            const currentY = getPointerClientY(event);
+            const delta = Math.max(0, currentY - vocabSheetDrag.startY);
+            if (delta > 6) {
+                vocabSheetDrag.wasDragged = true;
+            }
+            vocabSheetDrag.offsetY = Math.min(delta, vocabSheetDrag.height);
+        };
+
+        const onVocabSheetDragEnd = () => {
+            if (!vocabSheetDrag.active) {
+                return;
+            }
+            const closeThreshold = Math.min(vocabSheetDrag.height * 0.35, 140);
+            const shouldClose = !vocabSheetDrag.wasDragged || vocabSheetDrag.offsetY > closeThreshold;
+            vocabSheetDrag.active = false;
+            vocabSheetDrag.offsetY = 0;
+            vocabSheetDrag.wasDragged = false;
+            if (shouldClose) {
+                sidebarTab.value = null;
+            }
+        };
+
+        const vocabSheetStyle = computed(() => ({
+            transform: `translateY(${vocabSheetDrag.offsetY}px)`,
+            transition: vocabSheetDrag.active ? 'none' : 'transform 200ms ease-out'
+        }));
+
+        const openVocabularySheet = () => {
+            if (hasVocabulary.value) {
+                sidebarTab.value = 'vocabulary';
+            }
+        };
+
+        const updateLayoutMode = () => {
+            if (typeof window === 'undefined' || !window.matchMedia) {
+                return;
+            }
+            const isDesktopNow = window.matchMedia('(min-width: 1024px)').matches;
+            const wasDesktop = layoutIsDesktop.value;
+            layoutIsDesktop.value = isDesktopNow;
+            if (isDesktopNow && !wasDesktop && sidebarTab.value === null) {
+                const fallbackTab = lastSidebarTab.value
+                    || (hasVocabulary.value ? 'vocabulary' : (playlistContext.value ? 'playlist' : null));
+                if (fallbackTab) {
+                    sidebarTab.value = fallbackTab;
+                }
+            }
+        };
 
         // Player state
         const player = ref(null);
@@ -906,12 +999,15 @@ createApp({
 
         onMounted(() => {
             initApp();
+            updateLayoutMode();
+            window.addEventListener('resize', updateLayoutMode);
         });
 
         onUnmounted(() => {
             backendCleanup();
             cleanupPolling();
             window.removeEventListener('beforeunload', backendCleanup);
+            window.removeEventListener('resize', updateLayoutMode);
         });
 
         // Watch admin tab changes
@@ -939,6 +1035,17 @@ createApp({
                 sidebarTab.value = null;
             }
         }, { immediate: true });
+
+        watch(sidebarTab, (nextTab) => {
+            if (nextTab) {
+                lastSidebarTab.value = nextTab;
+            }
+            if (nextTab !== 'vocabulary') {
+                vocabSheetDrag.active = false;
+                vocabSheetDrag.offsetY = 0;
+                vocabSheetDrag.wasDragged = false;
+            }
+        });
 
         // ========================================================================
         // RETURN - Export all state and methods to template
@@ -1000,6 +1107,12 @@ createApp({
             playlistContext,
             playlistContextLoading,
             sidebarTab,
+            vocabSheet,
+            vocabSheetStyle,
+            onVocabSheetDragStart,
+            onVocabSheetDragMove,
+            onVocabSheetDragEnd,
+            openVocabularySheet,
             playPageVisibleSegments,
             playPageHasWordTimestamps,
             goHome: () => Router.goHome(),

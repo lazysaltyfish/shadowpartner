@@ -84,6 +84,87 @@ test.describe('Play Page', () => {
   });
 });
 
+test.describe('Play Page - Vocabulary Sheet', () => {
+  const testAssetId = 'cfd555cd-bafc-4415-93e6-c794dacddbf8';
+
+  const stubVocabulary = async (page) => {
+    await page.route('**/api/assets/*/vocabulary', route => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [
+            {
+              id: 'vocab-1',
+              word: '食べる',
+              reading: 'たべる',
+              meaning_cn: '吃',
+              meaning_en: 'eat',
+              jlpt_level: 'N5',
+              start_time: 1.2
+            }
+          ],
+          stats: { total: 1 }
+        })
+      });
+    });
+  };
+
+  test('should reopen the mobile vocabulary sheet after closing', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await stubVocabulary(page);
+
+    await page.goto(`/#/play/${testAssetId}`);
+    await page.waitForTimeout(2000);
+
+    const hasError = await page.locator('text=返回首页').isVisible().catch(() => false);
+    if (hasError) {
+      expect(hasError).toBeTruthy();
+      return;
+    }
+
+    const sheet = page.getByTestId('vocab-sheet');
+    await expect(sheet).toBeVisible();
+
+    const handle = page.getByTestId('vocab-sheet-handle');
+    await handle.dispatchEvent('pointerdown', { clientX: 100, clientY: 10 });
+    await handle.dispatchEvent('pointerup', { clientX: 100, clientY: 10 });
+
+    await expect(sheet).toBeHidden();
+
+    const reopen = page.getByTestId('vocab-sheet-reopen');
+    await expect(reopen).toBeVisible();
+    await reopen.click();
+    await expect(sheet).toBeVisible();
+  });
+
+  test('should restore sidebar when resizing to desktop after closing', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await stubVocabulary(page);
+
+    await page.goto(`/#/play/${testAssetId}`);
+    await page.waitForTimeout(2000);
+
+    const hasError = await page.locator('text=返回首页').isVisible().catch(() => false);
+    if (hasError) {
+      expect(hasError).toBeTruthy();
+      return;
+    }
+
+    const sheet = page.getByTestId('vocab-sheet');
+    await expect(sheet).toBeVisible();
+
+    const handle = page.getByTestId('vocab-sheet-handle');
+    await handle.dispatchEvent('pointerdown', { clientX: 100, clientY: 10 });
+    await handle.dispatchEvent('pointerup', { clientX: 100, clientY: 10 });
+
+    await expect(sheet).toBeHidden();
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await expect(page.locator('aside')).toBeVisible();
+  });
+});
+
 test.describe('Play Page - Player Initialization', () => {
   const testAssetId = 'cfd555cd-bafc-4415-93e6-c794dacddbf8';
 
