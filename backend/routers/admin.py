@@ -71,6 +71,7 @@ class SubtitleTrackResponse(BaseModel):
     asset_id: str
     asset_identifier: str
     asset_type: str
+    asset_title: Optional[str] = None
     track_type: str
     source: str
     language: str
@@ -360,11 +361,29 @@ async def list_subtitle_tracks(
         tracks = get_all_subtitle_tracks(db, limit=limit, offset=offset)
         result = []
         for track in tracks:
+            asset_title = None
+            if track.asset:
+                meta_title = (track.asset.meta or {}).get("title")
+                if meta_title:
+                    asset_title = meta_title
+                else:
+                    content_title = None
+                    if track.track_type == SubtitleTrackType.PROCESSED and track.content:
+                        content_title = track.content.get("title")
+                    if not content_title:
+                        processed_track = get_subtitle_track_by_asset(
+                            db, track.asset_id, SubtitleTrackType.PROCESSED, is_default=True
+                        )
+                        if processed_track and processed_track.content:
+                            content_title = processed_track.content.get("title")
+                    asset_title = content_title
+
             track_response = SubtitleTrackResponse(
                 id=str(track.id),
                 asset_id=str(track.asset_id),
                 asset_identifier=track.asset.identifier if track.asset else "",
                 asset_type=track.asset.type.value if track.asset else "",
+                asset_title=asset_title,
                 track_type=track.track_type.value,
                 source=track.source.value,
                 language=track.language,

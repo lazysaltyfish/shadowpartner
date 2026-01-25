@@ -966,7 +966,6 @@
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
                                 <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Username</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assets Count</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created At</th>
@@ -975,13 +974,10 @@
                             </thead>
                             <tbody class="bg-white divide-y divide-gray-200">
                                 <tr v-if="adminUsers.length === 0">
-                                    <td colspan="5" class="px-6 py-4 text-center text-gray-500">No users found</td>
+                                    <td colspan="4" class="px-6 py-4 text-center text-gray-500">No users found</td>
                                 </tr>
                                 <tr v-for="user in adminUsers" :key="user.id" class="hover:bg-gray-50">
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" :title="user.id">
-                                        {{ user.id.substring(0, 8) }}...
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 cursor-help" :title="user.id">
                                         {{ user.username || 'Guest' }}
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -1008,7 +1004,6 @@
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
                                 <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Identifier</th>
@@ -1021,26 +1016,30 @@
                             </thead>
                             <tbody class="bg-white divide-y divide-gray-200">
                                 <tr v-if="adminAssets.length === 0">
-                                    <td colspan="9" class="px-6 py-4 text-center text-gray-500">No assets found</td>
+                                    <td colspan="8" class="px-6 py-4 text-center text-gray-500">No assets found</td>
                                 </tr>
                                 <tr v-for="asset in adminAssets" :key="asset.id" class="hover:bg-gray-50">
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" :title="asset.id">
-                                        {{ asset.id.substring(0, 8) }}...
-                                    </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                         <span
                                             :class="[
-                                                'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium',
+                                                'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium cursor-help',
                                                 asset.type === 'youtube' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
                                             ]"
+                                            :title="asset.id"
                                         >
                                             {{ asset.type === 'youtube' ? 'YouTube' : 'Upload' }}
                                         </span>
                                     </td>
-                                    <td class="px-6 py-4 text-sm text-gray-900 max-w-xs truncate" :title="asset.title || '-'">
-                                        {{ asset.title || '-' }}
+                                    <td class="px-6 py-4 text-sm text-gray-900 max-w-xs">
+                                        <button
+                                            @click="adminOpenPlayPage(asset)"
+                                            class="block w-full text-left text-blue-600 hover:text-blue-800 hover:underline truncate"
+                                            :title="asset.title || asset.identifier || '-'"
+                                        >
+                                            {{ asset.title || asset.identifier || '-' }}
+                                        </button>
                                     </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 cursor-pointer hover:text-blue-600 hover:underline" :title="asset.identifier" @click="adminOpenPlayPage(asset)">
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" :title="asset.identifier">
                                         {{ asset.identifier.substring(0, 20) }}{{ asset.identifier.length > 20 ? '...' : '' }}
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm">
@@ -1085,7 +1084,6 @@
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
                                 <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Asset</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
                                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
@@ -1097,22 +1095,29 @@
                             </thead>
                             <tbody class="bg-white divide-y divide-gray-200">
                                 <tr v-if="adminSubtitleTracks.length === 0">
-                                    <td colspan="8" class="px-6 py-4 text-center text-gray-500">No subtitle tracks found</td>
+                                    <td colspan="7" class="px-6 py-4 text-center text-gray-500">No subtitle tracks found</td>
                                 </tr>
                                 <tr v-for="track in adminSubtitleTracks" :key="track.id" class="hover:bg-gray-50">
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" :title="track.id">
-                                        {{ track.id.substring(0, 8) }}...
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm" :title="track.asset_identifier">
-                                        <span
-                                            :class="[
-                                                'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium mr-2',
-                                                track.asset_type === 'youtube' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
-                                            ]"
-                                        >
-                                            {{ track.asset_type === 'youtube' ? 'YT' : 'UP' }}
-                                        </span>
-                                        <span class="text-gray-900">{{ track.asset_identifier.substring(0, 16) }}{{ track.asset_identifier.length > 16 ? '...' : '' }}</span>
+                                    <td class="px-6 py-4 text-sm">
+                                        <div class="flex items-center gap-2 min-w-0">
+                                            <span
+                                                :class="[
+                                                    'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium cursor-help',
+                                                    track.asset_type === 'youtube' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
+                                                ]"
+                                                :title="track.id"
+                                            >
+                                                {{ track.asset_type === 'youtube' ? 'YT' : 'UP' }}
+                                            </span>
+                                            <div class="min-w-0">
+                                                <div class="text-gray-900 font-medium truncate" :title="track.asset_title || track.asset_identifier || '-'">
+                                                    {{ track.asset_title || track.asset_identifier || '-' }}
+                                                </div>
+                                                <div v-if="track.asset_title && track.asset_identifier" class="text-xs text-gray-400 truncate" :title="track.asset_identifier">
+                                                    {{ track.asset_identifier }}
+                                                </div>
+                                            </div>
+                                        </div>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                         <span
@@ -1184,16 +1189,17 @@
                                 <div v-for="playlist in adminPlaylists" :key="playlist.id" class="border border-gray-200 rounded-lg p-4 flex flex-col gap-3">
                                     <div class="flex items-start justify-between gap-4">
                                         <div class="min-w-0">
-                                            <h3 class="text-lg font-semibold truncate">
-                                                <button
-                                                    v-if="playlist.item_count > 0"
-                                                    @click="adminOpenPlaylistPlay(playlist)"
-                                                    class="text-blue-600 hover:text-blue-800 hover:underline text-left truncate w-full"
-                                                >
-                                                    {{ playlist.title }}
-                                                </button>
-                                                <span v-else class="text-gray-800">{{ playlist.title }}</span>
-                                            </h3>
+                                        <h3 class="text-lg font-semibold truncate">
+                                            <button
+                                                v-if="playlist.item_count > 0"
+                                                @click="adminOpenPlaylistPlay(playlist)"
+                                                class="text-blue-600 hover:text-blue-800 hover:underline text-left truncate w-full"
+                                                :title="playlist.id"
+                                            >
+                                                {{ playlist.title }}
+                                            </button>
+                                            <span v-else class="text-gray-800" :title="playlist.id">{{ playlist.title }}</span>
+                                        </h3>
                                             <p v-if="playlist.description" class="text-sm text-gray-500 mt-1">{{ playlist.description }}</p>
                                             <p v-else class="text-sm text-gray-400 mt-1">No description</p>
                                         </div>
@@ -1236,7 +1242,9 @@
                                         ← Back
                                     </button>
                                     <div>
-                                        <h2 class="text-lg font-semibold text-gray-800">Playlist: {{ adminActivePlaylist.title }}</h2>
+                                        <h2 class="text-lg font-semibold text-gray-800 cursor-help" :title="adminActivePlaylist.id">
+                                            Playlist: {{ adminActivePlaylist.title }}
+                                        </h2>
                                         <p class="text-sm text-gray-500">{{ adminPlaylistItems.length }} videos</p>
                                     </div>
                                 </div>

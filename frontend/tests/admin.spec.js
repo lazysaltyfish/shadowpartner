@@ -109,8 +109,8 @@ test.describe('Admin Page', () => {
     // Wait for assets table to load
     await expect(page.locator('text=test_video_id')).toBeVisible();
 
-    // Click on asset identifier to open play page
-    await page.click(`text=${'test_video_id'.substring(0, 20)}`);
+    // Click on asset title to open play page
+    await page.click('text=Test Video');
 
     // Verify play page loaded
     await expect(page.locator('text=Test Video')).toBeVisible();

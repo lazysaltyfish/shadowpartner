@@ -177,7 +177,7 @@ Input (File + User SRT Subtitle)
 - `PATCH /api/admin/assets/{asset_id}/meta` - Update metadata
 
 ### Admin Subtitle Track Management
-- `GET /api/admin/subtitle-tracks` - List subtitle tracks
+- `GET /api/admin/subtitle-tracks` - List subtitle tracks (includes `asset_title` when available)
 - `DELETE /api/admin/subtitle-tracks/{track_id}` - Delete track
 
 ### Playlists

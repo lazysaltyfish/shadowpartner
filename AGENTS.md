@@ -30,6 +30,7 @@ word-level timing, furigana, and Chinese translations.
 ## Architecture Overview
 - **Backend** exposes REST endpoints, manages auth sessions, database, storage,
   and task orchestration.
+- Admin subtitle track listings include `asset_title` for frontend display when available.
 - **Worker** connects via WebSocket for transcription/NLP/thumbnail generation;
   processing requires an online worker.
 - **Frontend** is a static PWA that consumes backend APIs and supports both
