@@ -58,6 +58,7 @@ manifest.json
 - YouTube player CSS clamps height so subtitles remain visible.
 - Frontend modules include JSDoc for navigation and maintenance.
 - Admin tables hide internal IDs behind hover tooltips; asset jump links are on the title cell; subtitle tracks show the video name.
+- Admin assets table no longer displays uploader information.
 - Mobile vocabulary bottom sheet supports drag-to-hide via the handle (pointer events); a quick tap on the handle also closes it.
 - When the sheet is closed on mobile, a small "词汇" pill reopens it; resizing to desktop restores the last sidebar tab automatically.
 - Play page Playwright tests cover mobile vocabulary sheet close/reopen and desktop restore behavior.

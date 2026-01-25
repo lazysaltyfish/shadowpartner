@@ -233,7 +233,6 @@ def test_list_assets_as_admin(admin_client, test_user):
     assert "type" in asset
     assert "identifier" in asset
     assert "storage_path" in asset
-    assert "created_by" in asset
     assert "created_at" in asset
     assert "subtitle_tracks_count" in asset
 

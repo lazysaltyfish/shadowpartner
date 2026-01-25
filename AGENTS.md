@@ -31,6 +31,7 @@ word-level timing, furigana, and Chinese translations.
 - **Backend** exposes REST endpoints, manages auth sessions, database, storage,
   and task orchestration.
 - Admin subtitle track listings include `asset_title` for frontend display when available.
+- Ingestion endpoints (`/api/process`, `/api/upload*`) are admin-only; admin asset responses no longer include uploader fields.
 - **Worker** connects via WebSocket for transcription/NLP/thumbnail generation;
   processing requires an online worker.
 - **Frontend** is a static PWA that consumes backend APIs and supports both

@@ -2,8 +2,8 @@
 
 This module tests critical security behaviors:
 1. /api/session should work WITHOUT authentication (public endpoint)
-2. /api/process should REQUIRE authentication (401 without X-Session-Id)
-3. /api/upload/* endpoints should REQUIRE authentication
+2. /api/process should REQUIRE auth + admin sessions
+3. /api/upload/* endpoints should REQUIRE auth + admin sessions
 
 These are regression tests to prevent accidental security changes
 when refactoring router dependencies.
@@ -15,6 +15,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from main import create_app
+from session_manager import create_admin_session
+
+
+def _create_admin_session_id() -> str:
+    return create_admin_session("test_admin").session_id
 
 
 @pytest.fixture(scope="function")
@@ -58,10 +63,10 @@ class TestSessionEndpoint:
 
 
 class TestProcessEndpointAuth:
-    """Tests for /api/process endpoint authentication (auth required)."""
+    """Tests for /api/process endpoint authentication (auth + admin required)."""
 
     def test_process_requires_auth(self, client: TestClient):
-        """Test that /api/process returns 401 without X-Session-Id header."""
+        """Test that /api/process returns 401 without auth headers."""
         response = client.post(
             "/api/process", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
         )
@@ -71,11 +76,12 @@ class TestProcessEndpointAuth:
         )
 
     def test_process_works_with_valid_session(self, client: TestClient):
-        """Test that /api/process works with a valid X-Session-Id."""
+        """Test that /api/process works with a valid X-Session-Id + X-Admin-Session-Id."""
         # First, create a session
         session_response = client.post("/api/session")
         assert session_response.status_code == 200
         session_id = session_response.json()["session_id"]
+        admin_session_id = _create_admin_session_id()
 
         # Now use that session to call /api/process
         # Note: This will fail with a download error (no network/yt-dlp),
@@ -83,7 +89,10 @@ class TestProcessEndpointAuth:
         process_response = client.post(
             "/api/process",
             json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
-            headers={"X-Session-Id": session_id},
+            headers={
+                "X-Session-Id": session_id,
+                "X-Admin-Session-Id": admin_session_id,
+            },
         )
         # Should get 200 (task created) or a download error, but NOT 401
         assert process_response.status_code != 401, (
@@ -100,10 +109,14 @@ class TestProcessEndpointAuth:
 
     def test_process_rejects_invalid_session(self, client: TestClient):
         """Test that /api/process rejects invalid X-Session-Id."""
+        admin_session_id = _create_admin_session_id()
         response = client.post(
             "/api/process",
             json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
-            headers={"X-Session-Id": "invalid-session-id-12345"},
+            headers={
+                "X-Session-Id": "invalid-session-id-12345",
+                "X-Admin-Session-Id": admin_session_id,
+            },
         )
         assert response.status_code == 401, (
             f"/api/process should reject invalid session. "
@@ -112,10 +125,10 @@ class TestProcessEndpointAuth:
 
 
 class TestUploadEndpointsAuth:
-    """Tests for /api/upload/* endpoints authentication (auth required)."""
+    """Tests for /api/upload/* endpoints authentication (auth + admin required)."""
 
     def test_upload_init_requires_auth(self, client: TestClient):
-        """Test that /api/upload/init returns 401 without X-Session-Id."""
+        """Test that /api/upload/init returns 401 without auth headers."""
         response = client.post(
             "/api/upload/init", data={"filename": "test.mp3", "total_chunks": 1, "total_size": 1024}
         )
@@ -125,17 +138,21 @@ class TestUploadEndpointsAuth:
         )
 
     def test_upload_init_works_with_session(self, client: TestClient):
-        """Test that /api/upload/init works with valid X-Session-Id."""
+        """Test that /api/upload/init works with valid X-Session-Id + X-Admin-Session-Id."""
         # Create a session first
         session_response = client.post("/api/session")
         assert session_response.status_code == 200
         session_id = session_response.json()["session_id"]
+        admin_session_id = _create_admin_session_id()
 
         # Now call upload/init with the session
         response = client.post(
             "/api/upload/init",
             data={"filename": "test.mp3", "total_chunks": 1, "total_size": 1024},
-            headers={"X-Session-Id": session_id},
+            headers={
+                "X-Session-Id": session_id,
+                "X-Admin-Session-Id": admin_session_id,
+            },
         )
         assert response.status_code in (200, 503), (
             f"/api/upload/init should work with valid session. "
@@ -146,7 +163,7 @@ class TestUploadEndpointsAuth:
             assert "task_id" in data
 
     def test_upload_requires_auth(self, client: TestClient):
-        """Test that /api/upload returns 401 without X-Session-Id."""
+        """Test that /api/upload returns 401 without auth headers."""
         # Use a small dummy file
         response = client.post(
             "/api/upload", files={"file": ("test.mp3", b"dummy content", "audio/mpeg")}

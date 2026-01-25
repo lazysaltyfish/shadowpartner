@@ -205,6 +205,8 @@ Admin endpoints (require `X-Admin-Session-Id`):
 - Guest users are auto-created when sessions are created.
 - Upload sessions enforce per-session limits, reject out-of-order chunks, and
   are swept by a TTL sweeper.
+- Ingestion endpoints (`/api/process`, `/api/upload*`) require admin sessions.
+- Assets no longer track uploader; `created_by` is deprecated and not returned by admin APIs.
 - Worker-generated JPEG thumbnails are stored as `meta.thumbnail_path` and
   served from `/api/assets/{asset_id}/thumbnail`.
 - Async tasks use a shared `ThreadPoolExecutor` and a `TaskManager` with a
@@ -243,7 +245,7 @@ Use `--dry-run` by default; `--force` is required for deletion.
   identifier: str,
   storage_path: Optional[str],
   meta: Optional[dict],
-  created_by: UUID,
+  created_by: Optional[UUID],  # deprecated (no longer populated)
   is_admin_upload: bool,
   created_at: DateTime,
 }

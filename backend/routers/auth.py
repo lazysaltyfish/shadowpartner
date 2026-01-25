@@ -1,7 +1,7 @@
-"""Authenticated API routes - requires X-Session-Id header.
+"""Authenticated API routes - requires X-Session-Id + X-Admin-Session-Id headers.
 
 This module contains endpoints for file upload and processing that require
-an anonymous auth session.
+an auth session and an admin session.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from models import (
 from processing import check_cache, download_and_process, process_audio_task
 from routers.decorators import rate_limit
 from services.video_utils import generate_video_id_from_file
-from session_manager import AdminSession
+from session_manager import get_current_admin_session
 from uploads import (
     UPLOAD_DIR,
     _ensure_dir,
@@ -60,7 +60,13 @@ from validators import (
     validate_upload_size,
 )
 
-router = APIRouter(dependencies=[Depends(session_manager.get_current_session)], tags=["auth"])
+router = APIRouter(
+    dependencies=[
+        Depends(session_manager.get_current_session),
+        Depends(get_current_admin_session),
+    ],
+    tags=["auth"],
+)
 logger = get_logger(__name__)
 
 
@@ -161,19 +167,13 @@ async def process_video(
     request: Request,
     video_request: VideoRequest,
     background_tasks: BackgroundTasks,
-    auth_session: Optional[AuthSession] = Depends(session_manager.get_current_session_optional),
-    admin_session: Optional[AdminSession] = Depends(
-        session_manager.get_current_admin_session_optional
-    ),
+    auth_session: AuthSession = Depends(session_manager.get_current_session),
 ):
     try:
         # Check session limits BEFORE creating any task entries
-        if auth_session:
-            limit_ok = await session_manager.update_session_upload(
-                auth_session, 0, task_increment=True
-            )
-            if not limit_ok:
-                raise HTTPException(status_code=429, detail="Session upload limit exceeded")
+        limit_ok = await session_manager.update_session_upload(auth_session, 0, task_increment=True)
+        if not limit_ok:
+            raise HTTPException(status_code=429, detail="Session upload limit exceeded")
 
         _require_worker_online()
 
@@ -203,7 +203,7 @@ async def process_video(
         if state.task_manager is None:
             raise RuntimeError("Task manager not initialized")
 
-        is_admin_upload = admin_session is not None
+        is_admin_upload = True
         state.task_manager.create_task(
             download_and_process(task_id, video_request.url, is_admin_upload=is_admin_upload),
             name=f"download_and_process:{task_id}",
@@ -356,9 +356,6 @@ async def upload_subtitle(
 async def complete_upload(
     request: Request,
     auth_session: AuthSession = Depends(session_manager.get_current_session),
-    admin_session: Optional[AdminSession] = Depends(
-        session_manager.get_current_admin_session_optional
-    ),
     task_id: str = Form(...),
     filename: str = Form(...),
     subtitle_filename: Optional[str] = Form(None),
@@ -446,7 +443,7 @@ async def complete_upload(
             raise RuntimeError("Task manager not initialized")
 
         # Use the original temp file for processing (session.temp_file contains the uploaded data)
-        is_admin_upload = admin_session is not None
+        is_admin_upload = True
         state.task_manager.create_task(
             process_audio_task(
                 task_id,
@@ -455,7 +452,6 @@ async def complete_upload(
                 filename,
                 download_time=0.0,
                 subtitle_path=subtitle_path,
-                created_by=auth_session.user_id,
                 asset_meta={
                     "filename": filename,
                     "original_ext": os.path.splitext(filename)[1] or ".mp3",
@@ -474,9 +470,6 @@ async def upload_video(
     request: Request,
     background_tasks: BackgroundTasks,
     auth_session: AuthSession = Depends(session_manager.get_current_session),
-    admin_session: Optional[AdminSession] = Depends(
-        session_manager.get_current_admin_session_optional
-    ),
     file: UploadFile = File(...),
     subtitle: Optional[UploadFile] = File(None),
 ):
@@ -547,7 +540,7 @@ async def upload_video(
     if temp_file is None:
         raise HTTPException(status_code=500, detail="Temporary upload file missing")
 
-    is_admin_upload = admin_session is not None
+    is_admin_upload = True
     state.task_manager.create_task(
         process_audio_task(
             task_id,
@@ -556,7 +549,6 @@ async def upload_video(
             file.filename,
             download_time=0.0,
             subtitle_path=subtitle_path,
-            created_by=auth_session.user_id,
             asset_meta={
                 "filename": file.filename,
                 "original_ext": os.path.splitext(file.filename)[1] or ".mp3",

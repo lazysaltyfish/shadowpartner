@@ -57,7 +57,6 @@ class AssetResponse(BaseModel):
     identifier: str
     storage_path: Optional[str]
     meta: Optional[dict]
-    created_by: Optional[str]
     created_at: str
     subtitle_tracks_count: int
     is_admin_upload: bool
@@ -208,7 +207,6 @@ async def list_assets(
                 identifier=asset.identifier,
                 storage_path=asset.storage_path,
                 meta=asset.meta,
-                created_by=str(asset.created_by) if asset.created_by else None,
                 created_at=asset.created_at.isoformat(),
                 subtitle_tracks_count=len(asset.subtitle_tracks),
                 is_admin_upload=asset.is_admin_upload,
