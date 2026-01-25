@@ -1,0 +1,9 @@
+[project]
+name = "shadowpartner-auto-uploader"
+version = "0.1.0"
+description = "ShadowPartner auto uploader CLI"
+requires-python = ">=3.11"
+dependencies = [
+  "yt-dlp>=2024.01.01",
+]
+
