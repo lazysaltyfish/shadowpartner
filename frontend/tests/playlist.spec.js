@@ -141,20 +141,7 @@ test.describe('Play Page Playlist Sidebar', () => {
   const playlistId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
   const assetId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 
-  test.beforeEach(async ({ page }) => {
-    await page.route('**/api/session', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          session_id: 'session-123',
-          expires_at: Date.now() + 3600000
-        })
-      });
-    });
-  });
-
-  test('shows sidebar when playlist_id exists', async ({ page }) => {
+  const stubAsset = async (page) => {
     await page.route('**/api/assets/*', async (route) => {
       await route.fulfill({
         status: 200,
@@ -169,7 +156,9 @@ test.describe('Play Page Playlist Sidebar', () => {
         })
       });
     });
+  };
 
+  const stubPlaylistContext = async (page) => {
     await page.route('**/api/playlists/*/context*', async (route) => {
       await route.fulfill({
         status: 200,
@@ -189,12 +178,103 @@ test.describe('Play Page Playlist Sidebar', () => {
         })
       });
     });
+  };
+
+  const stubVocabulary = async (page) => {
+    await page.route('**/api/assets/*/vocabulary', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [
+            {
+              id: 'vocab-1',
+              word: '食べる',
+              reading: 'たべる',
+              meaning_cn: '吃',
+              meaning_en: 'eat',
+              jlpt_level: 'N5',
+              start_time: 1.2
+            }
+          ],
+          stats: { total: 1 }
+        })
+      });
+    });
+  };
+
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/api/session', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          session_id: 'session-123',
+          expires_at: Date.now() + 3600000
+        })
+      });
+    });
+  });
+
+  test('shows sidebar when playlist_id exists', async ({ page }) => {
+    await stubAsset(page);
+    await stubPlaylistContext(page);
 
     await page.goto(`/#/play/${assetId}?playlist_id=${playlistId}`);
 
+    const sidebar = page.locator('aside');
     // Check for the new tabbed sidebar with "播放列表" (Playlist in Chinese)
-    await expect(page.locator('aside:has-text("播放列表")')).toBeVisible();
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar.getByText('播放列表')).toBeVisible();
     // Check that playlist items are visible
-    await expect(page.locator('text=Lesson 2')).toBeVisible();
+    await expect(sidebar.getByText('Lesson 2')).toBeVisible();
+  });
+
+  test('defaults to playlist tab when playlist_id and vocabulary exist', async ({ page }) => {
+    await stubAsset(page);
+    await stubPlaylistContext(page);
+    await stubVocabulary(page);
+
+    await page.goto(`/#/play/${assetId}?playlist_id=${playlistId}`);
+    const sidebar = page.locator('aside');
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar.getByText('Lesson 1')).toBeVisible();
+    await expect(sidebar.getByText('食べる')).toHaveCount(0);
+  });
+
+  test('switches between playlist and vocabulary tabs on desktop', async ({ page }) => {
+    await stubAsset(page);
+    await stubPlaylistContext(page);
+    await stubVocabulary(page);
+
+    await page.goto(`/#/play/${assetId}?playlist_id=${playlistId}`);
+    const sidebar = page.locator('aside');
+    await expect(sidebar).toBeVisible();
+
+    await page.click('aside button:has-text("重点词汇")');
+    await expect(sidebar.getByText('食べる')).toBeVisible();
+
+    await page.click('aside button:has-text("播放列表")');
+    await expect(sidebar.getByText('Lesson 1')).toBeVisible();
+  });
+
+  test('toggles playlist and vocabulary sheets on mobile', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await stubAsset(page);
+    await stubPlaylistContext(page);
+    await stubVocabulary(page);
+
+    await page.goto(`/#/play/${assetId}?playlist_id=${playlistId}`);
+    const playlistSheet = page.getByTestId('playlist-sheet');
+    await expect(playlistSheet).toBeVisible();
+
+    await playlistSheet.getByRole('button', { name: '词汇' }).click();
+    await expect(playlistSheet).toBeHidden();
+    const vocabSheet = page.getByTestId('vocab-sheet');
+    await expect(vocabSheet).toBeVisible();
+
+    await vocabSheet.getByRole('button', { name: '播放列表' }).click();
+    await expect(vocabSheet).toBeHidden();
+    await expect(playlistSheet).toBeVisible();
   });
 });

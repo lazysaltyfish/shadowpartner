@@ -63,6 +63,8 @@ manifest.json
 - When the sheet is closed on mobile, a small "词汇" pill reopens it; resizing to desktop restores the last sidebar tab automatically.
 - Play page Playwright tests cover mobile vocabulary sheet close/reopen and desktop restore behavior.
 - Home grid thumbnails enforce a fixed 16:9 ratio via inline padding-top + absolute media; grid uses auto-rows-max/content-start, hides scrollbars, auto-loads on scroll, uses 5 columns at 2xl widths, and clamps titles to two lines with hover title tooltips.
+- Play page sidebar defaults to playlist when playlist context exists, keeps vocabulary as a toggle tab, and mirrors both tabs in mobile bottom sheets with in-sheet toggles.
+- Play page playlist regression coverage expanded in `frontend/tests/playlist.spec.js` (default tab, desktop switching, mobile sheet toggles).
 
 ## Testing Requirements (Playwright)
 ```bash
